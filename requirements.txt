@@ -1,0 +1,65 @@
+# Django Core
+Django==5.0.8
+django-environ==0.11.2
+
+# Django REST Framework
+djangorestframework==3.15.2
+djangorestframework-simplejwt==5.3.1
+drf-spectacular==0.27.2
+
+# Database
+psycopg2-binary==2.9.9
+
+# Redis & Caching
+redis==5.0.8
+hiredis==2.3.2
+django-redis==5.4.0
+
+# Celery
+celery==5.4.0
+django-celery-beat==2.6.0
+kombu==5.3.7
+
+# Security & Auth
+django-otp==1.5.0
+qrcode==7.4.2
+bcrypt==4.2.0
+pyotp==2.9.0
+
+# CORS
+django-cors-headers==4.4.0
+
+# File Storage (AWS S3)
+django-storages==1.14.4
+boto3==1.35.0
+
+# File Processing
+Pillow==10.4.0
+python-magic==0.4.27
+
+# Excel & PDF Generation
+openpyxl==3.1.5
+weasyprint==62.3
+
+# Audit Trail
+django-auditlog==3.0.0
+
+# Filtering
+django-filter==24.3
+
+# SMS Gateway (Africa's Talking)
+africastalking==1.2.5
+
+# Utilities
+python-dateutil==2.9.0
+
+# Development
+ipython==8.27.0
+
+# WSGI Server
+gunicorn==23.0.0
+
+# Testing
+pytest==8.3.2
+pytest-django==4.9.0
+factory-boy==3.3.1
