@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     libxml2 \
     libxslt1.1 \
     shared-mime-info \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

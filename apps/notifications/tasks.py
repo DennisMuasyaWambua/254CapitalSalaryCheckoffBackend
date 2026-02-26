@@ -309,3 +309,78 @@ def send_deduction_reminders():
 
     except Exception as e:
         logger.error(f'Failed to send deduction reminders: {str(e)}')
+
+
+@shared_task
+def send_contract_expiry_alerts():
+    """
+    Send alerts to contract employees and HR about upcoming contract expirations.
+
+    This is a periodic task scheduled via Celery Beat.
+    Sends alerts at 30 days, 14 days, and 7 days before expiry.
+    """
+    try:
+        from apps.accounts.models import EmployeeProfile, CustomUser
+        from datetime import date, timedelta
+
+        today = date.today()
+        alert_periods = [30, 14, 7]  # Days before expiry to send alerts
+
+        total_alerts_sent = 0
+
+        for days_before in alert_periods:
+            expiry_date = today + timedelta(days=days_before)
+
+            # Get contract employees with contracts expiring on this date
+            expiring_profiles = EmployeeProfile.objects.filter(
+                employment_type=EmployeeProfile.EmploymentType.CONTRACT,
+                contract_end_date=expiry_date
+            ).select_related('user', 'employer')
+
+            for profile in expiring_profiles:
+                employee = profile.user
+
+                # Notify employee
+                Notification.objects.create(
+                    user=employee,
+                    title='Contract Expiry Alert',
+                    message=(
+                        f'Your employment contract with {profile.employer.name} is expiring in {days_before} days '
+                        f'(on {profile.contract_end_date.strftime("%d %B %Y")}). '
+                        f'Please contact your HR department for more information.'
+                    ),
+                    link='/profile',
+                    notification_type=Notification.NotificationType.REMINDER
+                )
+
+                # Send SMS to employee
+                sms_message = (
+                    f'254 Capital: Your contract with {profile.employer.name} expires in {days_before} days '
+                    f'({profile.contract_end_date.strftime("%d/%m/%Y")}). Please contact HR.'
+                )
+                send_sms(employee.phone_number, sms_message)
+
+                # Notify HR managers for this employer
+                hr_users = CustomUser.objects.filter(
+                    role='hr_manager',
+                    hr_profile__employer=profile.employer
+                )
+
+                for hr_user in hr_users:
+                    Notification.objects.create(
+                        user=hr_user,
+                        title='Contract Expiry Alert',
+                        message=(
+                            f'Contract employee {employee.get_full_name()} ({profile.employee_id}) '
+                            f'has a contract expiring in {days_before} days ({profile.contract_end_date.strftime("%d %B %Y")}).'
+                        ),
+                        link='/hr/employees',
+                        notification_type=Notification.NotificationType.REMINDER
+                    )
+
+                total_alerts_sent += 1
+
+        logger.info(f'Sent {total_alerts_sent} contract expiry alerts')
+
+    except Exception as e:
+        logger.error(f'Failed to send contract expiry alerts: {str(e)}')

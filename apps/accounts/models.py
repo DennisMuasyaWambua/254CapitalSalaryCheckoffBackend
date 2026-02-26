@@ -123,6 +123,10 @@ class EmployeeProfile(models.Model):
     for loan applications and disbursements.
     """
 
+    class EmploymentType(models.TextChoices):
+        CONFIRMED = 'confirmed', 'Confirmed Staff'
+        CONTRACT = 'contract', 'Contract Staff'
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(
         CustomUser,
@@ -139,6 +143,36 @@ class EmployeeProfile(models.Model):
         help_text='Employee ID assigned by the employer'
     )
     department = models.CharField(max_length=100, blank=True)
+
+    # Employment details
+    employment_type = models.CharField(
+        max_length=20,
+        choices=EmploymentType.choices,
+        default=EmploymentType.CONFIRMED,
+        db_index=True,
+        help_text='Type of employment: confirmed or contract staff'
+    )
+    contract_end_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Contract end date for contract employees'
+    )
+
+    # Contact information
+    work_email = models.EmailField(
+        blank=True,
+        help_text='Work email address'
+    )
+    personal_email = models.EmailField(
+        blank=True,
+        help_text='Personal email address'
+    )
+    residential_location = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text='Residential location/address'
+    )
+
     monthly_gross_salary = models.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -165,6 +199,8 @@ class EmployeeProfile(models.Model):
         unique_together = [['employer', 'employee_id']]
         indexes = [
             models.Index(fields=['employer', 'employee_id']),
+            models.Index(fields=['employment_type']),
+            models.Index(fields=['contract_end_date']),
         ]
         verbose_name = 'Employee Profile'
         verbose_name_plural = 'Employee Profiles'
@@ -173,10 +209,49 @@ class EmployeeProfile(models.Model):
         return f'{self.user.get_full_name()} - {self.employer.name} ({self.employee_id})'
 
     def save(self, *args, **kwargs):
-        """Normalize M-Pesa number if provided."""
+        """Validate contract end date and normalize M-Pesa number."""
+        # Validate that contract employees have a contract end date
+        if self.employment_type == self.EmploymentType.CONTRACT and not self.contract_end_date:
+            from django.core.exceptions import ValidationError
+            raise ValidationError('Contract end date is required for contract employees')
+
+        # Normalize M-Pesa number if provided
         if self.mpesa_number:
             self.mpesa_number = normalize_kenyan_phone(self.mpesa_number)
         super().save(*args, **kwargs)
+
+    @property
+    def is_confirmed_staff(self):
+        """Check if employee is confirmed staff."""
+        return self.employment_type == self.EmploymentType.CONFIRMED
+
+    @property
+    def is_contract_staff(self):
+        """Check if employee is contract staff."""
+        return self.employment_type == self.EmploymentType.CONTRACT
+
+    @property
+    def is_loan_eligible(self):
+        """Check if employee is eligible for loans (confirmed staff only)."""
+        return self.employment_type == self.EmploymentType.CONFIRMED
+
+    @property
+    def contract_expiring_soon(self):
+        """Check if contract is expiring within 30 days."""
+        if not self.is_contract_staff or not self.contract_end_date:
+            return False
+        from django.utils import timezone
+        from datetime import timedelta
+        days_until_expiry = (self.contract_end_date - timezone.now().date()).days
+        return 0 <= days_until_expiry <= 30
+
+    @property
+    def days_until_contract_expiry(self):
+        """Get number of days until contract expiry."""
+        if not self.is_contract_staff or not self.contract_end_date:
+            return None
+        from django.utils import timezone
+        return (self.contract_end_date - timezone.now().date()).days
 
 
 class HRProfile(models.Model):

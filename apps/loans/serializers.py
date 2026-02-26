@@ -94,6 +94,7 @@ class LoanApplicationDetailSerializer(serializers.ModelSerializer):
             'status', 'status_display', 'disbursement_date',
             'first_deduction_date', 'disbursement_method',
             'disbursement_method_display', 'disbursement_reference',
+            'terms_accepted', 'terms_accepted_at',
             'created_at', 'updated_at', 'is_active', 'can_be_edited',
             'total_paid', 'outstanding_balance',
             'status_history', 'repayment_schedule'
@@ -103,7 +104,7 @@ class LoanApplicationDetailSerializer(serializers.ModelSerializer):
             'total_repayment', 'monthly_deduction', 'status',
             'disbursement_date', 'first_deduction_date',
             'disbursement_method', 'disbursement_reference',
-            'created_at', 'updated_at'
+            'terms_accepted_at', 'created_at', 'updated_at'
         ]
 
 
@@ -124,6 +125,10 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
         required=False,
         allow_blank=True
     )
+    terms_accepted = serializers.BooleanField(
+        required=True,
+        help_text='Confirmation that terms and conditions have been accepted'
+    )
 
     def validate_principal_amount(self, value):
         """Validate principal amount is a multiple of 100."""
@@ -131,12 +136,27 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError('Amount must be a multiple of 100.')
         return value
 
+    def validate_terms_accepted(self, value):
+        """Validate that terms and conditions have been accepted."""
+        if not value:
+            raise serializers.ValidationError(
+                'You must accept the terms and conditions to proceed with the loan application.'
+            )
+        return value
+
     def validate(self, attrs):
-        """Additional validation for loan affordability."""
+        """Additional validation for loan affordability and eligibility."""
         # Get employee profile from context
         request = self.context.get('request')
         if request and hasattr(request.user, 'employee_profile'):
             employee_profile = request.user.employee_profile
+
+            # Check if employee is confirmed staff (eligibility requirement)
+            if not employee_profile.is_loan_eligible:
+                raise serializers.ValidationError(
+                    'Loan facility is only available to confirmed staff members. '
+                    'Contract employees are not eligible for this facility.'
+                )
 
             # Import here to avoid circular import
             from .services import calculate_flat_interest, calculate_loan_affordability

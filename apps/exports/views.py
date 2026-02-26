@@ -285,3 +285,146 @@ class EmployerSummaryReportView(APIView):
             'summaries': summaries,
             'total_employers': len(summaries)
         }, status=status.HTTP_200_OK)
+
+
+class CollectionSheetReportView(APIView):
+    """
+    GET /api/v1/exports/reports/collection-sheet/
+    Collection sheet report showing loan repayment details.
+
+    Query params:
+    - employer_id: Optional employer filter (required for HR)
+    - month: Optional month filter (1-12)
+    - year: Optional year filter
+    """
+
+    permission_classes = [IsAuthenticated, IsHROrAdmin]
+
+    def get(self, request):
+        """Get collection sheet report data."""
+        from apps.employers.models import Employer
+        from django.db.models import Sum, Q
+        from datetime import datetime
+
+        # Get parameters
+        employer_id = request.query_params.get('employer_id')
+        month = request.query_params.get('month')
+        year = request.query_params.get('year')
+
+        # Get employer
+        if request.user.role == 'hr_manager':
+            employer = request.user.hr_profile.employer
+            employer_id = str(employer.id)
+        else:  # admin
+            if employer_id:
+                try:
+                    employer = Employer.objects.get(id=employer_id)
+                except Employer.DoesNotExist:
+                    return Response(
+                        {'detail': 'Employer not found.'},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            else:
+                employer = None
+
+        # Base query for loans
+        loans = LoanApplication.objects.filter(
+            status__in=[LoanApplication.Status.APPROVED, LoanApplication.Status.DISBURSED]
+        ).select_related('employee', 'employee__employee_profile', 'employer')
+
+        if employer:
+            loans = loans.filter(employer=employer)
+
+        # Filter by disbursement date if month/year provided
+        if month and year:
+            try:
+                month_int = int(month)
+                year_int = int(year)
+                if not (1 <= month_int <= 12):
+                    return Response(
+                        {'detail': 'Month must be between 1 and 12.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                loans = loans.filter(
+                    disbursement_date__year=year_int,
+                    disbursement_date__month=month_int
+                )
+            except (TypeError, ValueError):
+                return Response(
+                    {'detail': 'Invalid month or year.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        # Build collection sheet data
+        collection_data = []
+
+        for loan in loans:
+            # Calculate total paid (cumulative deductions)
+            total_paid = RepaymentSchedule.objects.filter(
+                loan=loan,
+                is_paid=True
+            ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
+            # Get latest deduction (most recent paid installment)
+            latest_deduction = RepaymentSchedule.objects.filter(
+                loan=loan,
+                is_paid=True
+            ).order_by('-paid_date').first()
+
+            latest_deduction_amount = latest_deduction.amount if latest_deduction else Decimal('0.00')
+            latest_deduction_date = latest_deduction.paid_date if latest_deduction else None
+
+            # Get next scheduled deduction
+            next_deduction = RepaymentSchedule.objects.filter(
+                loan=loan,
+                is_paid=False
+            ).order_by('due_date').first()
+
+            next_deduction_amount = next_deduction.amount if next_deduction else Decimal('0.00')
+            next_deduction_date = next_deduction.due_date if next_deduction else None
+
+            # Calculate outstanding balance
+            outstanding_balance = loan.outstanding_balance
+
+            collection_data.append({
+                'loan_id': str(loan.id),
+                'application_number': loan.application_number,
+                'employee_name': loan.employee.get_full_name(),
+                'employee_id': loan.employee.employee_profile.employee_id,
+                'employer_name': loan.employer.name,
+                'initial_amount': float(loan.principal_amount),
+                'total_repayment': float(loan.total_repayment or Decimal('0.00')),
+                'monthly_deduction': float(loan.monthly_deduction or Decimal('0.00')),
+                'latest_deduction': float(latest_deduction_amount),
+                'latest_deduction_date': latest_deduction_date.isoformat() if latest_deduction_date else None,
+                'next_deduction': float(next_deduction_amount),
+                'next_deduction_date': next_deduction_date.isoformat() if next_deduction_date else None,
+                'cumulative_deductions': float(total_paid),
+                'outstanding_balance': float(outstanding_balance),
+                'status': loan.status,
+                'disbursement_date': loan.disbursement_date.isoformat() if loan.disbursement_date else None,
+                'repayment_months': loan.repayment_months,
+            })
+
+        # Calculate summary statistics
+        total_initial_amount = sum(item['initial_amount'] for item in collection_data)
+        total_cumulative = sum(item['cumulative_deductions'] for item in collection_data)
+        total_outstanding = sum(item['outstanding_balance'] for item in collection_data)
+
+        logger.info(f'Collection sheet report generated for {len(collection_data)} loans')
+
+        return Response({
+            'collection_data': collection_data,
+            'summary': {
+                'total_loans': len(collection_data),
+                'total_initial_amount': total_initial_amount,
+                'total_cumulative_deductions': total_cumulative,
+                'total_outstanding_balance': total_outstanding,
+            },
+            'filters': {
+                'employer_id': employer_id,
+                'employer_name': employer.name if employer else None,
+                'month': month,
+                'year': year,
+            }
+        }, status=status.HTTP_200_OK)

@@ -101,7 +101,9 @@ class LoanApplicationListCreateView(APIView):
             purpose=serializer.validated_data.get('purpose', ''),
             total_repayment=calc['total_repayment'],
             monthly_deduction=calc['monthly_deduction'],
-            status=LoanApplication.Status.SUBMITTED
+            status=LoanApplication.Status.SUBMITTED,
+            terms_accepted=serializer.validated_data['terms_accepted'],
+            terms_accepted_at=timezone.now() if serializer.validated_data['terms_accepted'] else None
         )
 
         # Create initial status history

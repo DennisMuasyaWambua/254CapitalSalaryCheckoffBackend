@@ -122,6 +122,17 @@ class LoanApplication(models.Model):
         help_text='Transaction reference for disbursement'
     )
 
+    # Terms and conditions acceptance
+    terms_accepted = models.BooleanField(
+        default=False,
+        help_text='Whether the employee has accepted the terms and conditions'
+    )
+    terms_accepted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='When the employee accepted the terms and conditions'
+    )
+
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -135,6 +146,7 @@ class LoanApplication(models.Model):
             models.Index(fields=['employer', 'status']),
             models.Index(fields=['disbursement_date']),
             models.Index(fields=['created_at']),
+            models.Index(fields=['terms_accepted']),
         ]
         ordering = ['-created_at']
         verbose_name = 'Loan Application'

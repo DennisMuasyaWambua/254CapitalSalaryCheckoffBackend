@@ -16,13 +16,18 @@ class EmployeeProfileSerializer(serializers.ModelSerializer):
 
     employer_name = serializers.CharField(source='employer.name', read_only=True)
     employer_id_display = serializers.UUIDField(source='employer.id', read_only=True)
+    employment_type_display = serializers.CharField(source='get_employment_type_display', read_only=True)
+    is_loan_eligible = serializers.BooleanField(read_only=True)
+    days_until_contract_expiry = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = EmployeeProfile
         fields = [
             'id', 'employer', 'employer_name', 'employer_id_display',
-            'employee_id', 'department', 'monthly_gross_salary',
-            'bank_name', 'bank_account_number', 'mpesa_number',
+            'employee_id', 'department', 'employment_type', 'employment_type_display',
+            'contract_end_date', 'work_email', 'personal_email', 'residential_location',
+            'monthly_gross_salary', 'bank_name', 'bank_account_number', 'mpesa_number',
+            'is_loan_eligible', 'days_until_contract_expiry',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
@@ -32,6 +37,18 @@ class EmployeeProfileSerializer(serializers.ModelSerializer):
         if value < Decimal('0.01'):
             raise serializers.ValidationError('Salary must be greater than zero.')
         return value
+
+    def validate(self, attrs):
+        """Validate contract end date for contract employees."""
+        employment_type = attrs.get('employment_type', getattr(self.instance, 'employment_type', None))
+        contract_end_date = attrs.get('contract_end_date', getattr(self.instance, 'contract_end_date', None))
+
+        if employment_type == EmployeeProfile.EmploymentType.CONTRACT and not contract_end_date:
+            raise serializers.ValidationError({
+                'contract_end_date': 'Contract end date is required for contract employees.'
+            })
+
+        return attrs
 
 
 class HRProfileSerializer(serializers.ModelSerializer):
@@ -120,6 +137,14 @@ class RegisterEmployeeSerializer(serializers.Serializer):
     employer_id = serializers.UUIDField()
     employee_id = serializers.CharField(max_length=50)
     department = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    employment_type = serializers.ChoiceField(
+        choices=EmployeeProfile.EmploymentType.choices,
+        default=EmployeeProfile.EmploymentType.CONFIRMED
+    )
+    contract_end_date = serializers.DateField(required=False, allow_null=True)
+    work_email = serializers.EmailField(required=False, allow_blank=True)
+    personal_email = serializers.EmailField(required=False, allow_blank=True)
+    residential_location = serializers.CharField(max_length=255, required=False, allow_blank=True)
     monthly_gross_salary = serializers.DecimalField(
         max_digits=12,
         decimal_places=2,
@@ -186,6 +211,15 @@ class RegisterEmployeeSerializer(serializers.Serializer):
                 'employee_id': 'This employee ID already exists for this employer.'
             })
 
+        # Validate contract end date for contract employees
+        employment_type = attrs.get('employment_type', EmployeeProfile.EmploymentType.CONFIRMED)
+        contract_end_date = attrs.get('contract_end_date')
+
+        if employment_type == EmployeeProfile.EmploymentType.CONTRACT and not contract_end_date:
+            raise serializers.ValidationError({
+                'contract_end_date': 'Contract end date is required for contract employees.'
+            })
+
         return attrs
 
     def create(self, validated_data):
@@ -194,6 +228,11 @@ class RegisterEmployeeSerializer(serializers.Serializer):
         employer_id = validated_data.pop('employer_id')
         employee_id = validated_data.pop('employee_id')
         department = validated_data.pop('department', '')
+        employment_type = validated_data.pop('employment_type', EmployeeProfile.EmploymentType.CONFIRMED)
+        contract_end_date = validated_data.pop('contract_end_date', None)
+        work_email = validated_data.pop('work_email', '')
+        personal_email = validated_data.pop('personal_email', '')
+        residential_location = validated_data.pop('residential_location', '')
         monthly_gross_salary = validated_data.pop('monthly_gross_salary')
         bank_name = validated_data.pop('bank_name')
         bank_account_number = validated_data.pop('bank_account_number')
@@ -217,6 +256,11 @@ class RegisterEmployeeSerializer(serializers.Serializer):
             employer_id=employer_id,
             employee_id=employee_id,
             department=department,
+            employment_type=employment_type,
+            contract_end_date=contract_end_date,
+            work_email=work_email,
+            personal_email=personal_email,
+            residential_location=residential_location,
             monthly_gross_salary=monthly_gross_salary,
             bank_name=bank_name,
             bank_account_number=bank_account_number,
@@ -302,6 +346,14 @@ class UpdateProfileSerializer(serializers.Serializer):
 
     # Employee-specific fields
     department = serializers.CharField(max_length=100, required=False)
+    employment_type = serializers.ChoiceField(
+        choices=EmployeeProfile.EmploymentType.choices,
+        required=False
+    )
+    contract_end_date = serializers.DateField(required=False, allow_null=True)
+    work_email = serializers.EmailField(required=False, allow_blank=True)
+    personal_email = serializers.EmailField(required=False, allow_blank=True)
+    residential_location = serializers.CharField(max_length=255, required=False, allow_blank=True)
     bank_name = serializers.CharField(max_length=100, required=False)
     bank_account_number = serializers.CharField(max_length=50, required=False)
     mpesa_number = serializers.CharField(max_length=20, required=False)
@@ -326,6 +378,11 @@ class UpdateProfileSerializer(serializers.Serializer):
         if instance.role == 'employee' and hasattr(instance, 'employee_profile'):
             profile = instance.employee_profile
             profile.department = validated_data.get('department', profile.department)
+            profile.employment_type = validated_data.get('employment_type', profile.employment_type)
+            profile.contract_end_date = validated_data.get('contract_end_date', profile.contract_end_date)
+            profile.work_email = validated_data.get('work_email', profile.work_email)
+            profile.personal_email = validated_data.get('personal_email', profile.personal_email)
+            profile.residential_location = validated_data.get('residential_location', profile.residential_location)
             profile.bank_name = validated_data.get('bank_name', profile.bank_name)
             profile.bank_account_number = validated_data.get(
                 'bank_account_number', profile.bank_account_number

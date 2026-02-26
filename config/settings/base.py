@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from datetime import timedelta
 import environ
+import dj_database_url
 
 # Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -93,17 +94,16 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
-# Use SQLite for development
+# Use dj-database-url to parse DATABASE_URL environment variable
+# PostgreSQL is used for both local development and production
+# Set DATABASE_URL in your .env file to connect to your PostgreSQL database
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    'default': dj_database_url.config(
+        default='postgresql://postgres:postgres@localhost:5432/salary_checkoff_db',
+        conn_max_age=600,
+        conn_health_checks=True,
+    )
 }
-# Uncomment below to use PostgreSQL
-# DATABASES = {
-#     'default': env.db('DATABASE_URL', default='postgresql://postgres:postgres@localhost:5432/salary_checkoff_db')
-# }
 
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.CustomUser'

@@ -1,0 +1,140 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+      - production
+  workflow_dispatch:
+
+env:
+  DOCKER_IMAGE: your-dockerhub-username/salary-checkoff-backend
+  DOCKER_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha,prefix={{branch}}-
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_IMAGE }}:buildcache,mode=max
+
+  deploy:
+    name: Deploy to EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          port: 22
+          script: |
+            set -e
+
+            echo "📦 Starting deployment..."
+
+            # Navigate to application directory
+            cd /opt/salary_checkoff
+
+            # Pull latest changes from repository (optional, if you keep deployment scripts there)
+            if [ -d ".git" ]; then
+              git pull origin main
+            fi
+
+            # Log in to DockerHub
+            echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+            # Pull the latest image
+            echo "🔄 Pulling latest Docker image..."
+            docker pull ${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}
+
+            # Stop and remove old containers
+            echo "🛑 Stopping old containers..."
+            docker-compose down || true
+
+            # Start new containers
+            echo "🚀 Starting new containers..."
+            docker-compose up -d
+
+            # Run migrations
+            echo "📊 Running database migrations..."
+            docker-compose exec -T web python manage.py migrate --noinput
+
+            # Collect static files
+            echo "📁 Collecting static files..."
+            docker-compose exec -T web python manage.py collectstatic --noinput
+
+            # Clean up old images
+            echo "🧹 Cleaning up old Docker images..."
+            docker image prune -af --filter "until=24h" || true
+
+            # Check health
+            echo "🏥 Checking application health..."
+            sleep 10
+            if curl -f http://localhost:8000/api/v1/ > /dev/null 2>&1; then
+              echo "✅ Deployment successful!"
+            else
+              echo "❌ Health check failed!"
+              docker-compose logs web
+              exit 1
+            fi
+
+            echo "🎉 Deployment completed successfully!"
+
+  notify:
+    name: Notify Deployment Status
+    needs: [build-and-push, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Deployment Success
+        if: ${{ needs.deploy.result == 'success' }}
+        run: |
+          echo "✅ Deployment to EC2 succeeded!"
+          echo "Image: ${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}"
+          echo "Commit: ${{ github.sha }}"
+
+      - name: Deployment Failed
+        if: ${{ needs.deploy.result == 'failure' }}
+        run: |
+          echo "❌ Deployment to EC2 failed!"
+          exit 1
