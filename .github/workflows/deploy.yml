@@ -109,7 +109,7 @@ jobs:
             # Check health
             echo "🏥 Checking application health..."
             sleep 10
-            if curl -f -L http://localhost:8000/api/v1/ > /dev/null 2>&1; then
+            if curl -f -L http://localhost:8000/admin/ > /dev/null 2>&1; then
               echo "✅ Deployment successful!"
             else
               echo "❌ Health check failed!"
