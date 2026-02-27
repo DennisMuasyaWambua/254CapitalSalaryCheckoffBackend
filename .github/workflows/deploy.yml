@@ -80,7 +80,7 @@ jobs:
             fi
 
             # Log in to DockerHub
-            echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+            echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
             # Pull the latest image
             echo "🔄 Pulling latest Docker image..."
