@@ -13,7 +13,6 @@ dj-database-url==2.2.0
 
 # Redis & Caching
 redis==5.0.8
-hiredis==2.3.2
 django-redis==5.4.0
 
 # Celery
