@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 env:
-  DOCKER_IMAGE: your-dockerhub-username/salary-checkoff-backend
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/salary-checkoff-backend
   DOCKER_TAG: ${{ github.sha }}
 
 jobs:
