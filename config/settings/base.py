@@ -280,10 +280,14 @@ if USE_S3:
     # Use S3 for media files
     DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
-# Africa's Talking SMS Configuration
+# Africa's Talking SMS Configuration (Legacy - keeping for reference)
 AFRICASTALKING_USERNAME = env('AFRICASTALKING_USERNAME', default='sandbox')
 AFRICASTALKING_API_KEY = env('AFRICASTALKING_API_KEY', default='')
 AFRICASTALKING_SENDER_ID = env('AFRICASTALKING_SENDER_ID', default='254CAPITAL')
+
+# Wasiliana SMS Configuration (Current)
+WASILIANA_API_KEY = env('WASILIANA_API_KEY', default='cLASQNLUPha4ryxweSJI2jKqNhyZrUs2HPnLDhDahs5eYufyTpOucPCjAtHckRfk')
+WASILIANA_SENDER_ID = env('WASILIANA_SENDER_ID', default='254-CAPITAL')
 
 # OTP Configuration
 OTP_EXPIRY_SECONDS = env.int('OTP_EXPIRY_SECONDS', default=300)  # 5 minutes

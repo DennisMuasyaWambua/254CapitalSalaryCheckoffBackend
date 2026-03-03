@@ -21,7 +21,8 @@ urlpatterns = [
     # HR and Admin login
     path('hr/login/', views.HRLoginView.as_view(), name='hr-login'),
     path('admin/login/', views.AdminLoginView.as_view(), name='admin-login'),
-    path('admin/verify-2fa/', views.AdminVerify2FAView.as_view(), name='admin-verify-2fa'),
+    path('verify-login-otp/', views.VerifyLoginOTPView.as_view(), name='verify-login-otp'),
+    path('admin/verify-2fa/', views.AdminVerify2FAView.as_view(), name='admin-verify-2fa'),  # Deprecated
 
     # Profile management
     path('profile/', views.ProfileView.as_view(), name='profile'),

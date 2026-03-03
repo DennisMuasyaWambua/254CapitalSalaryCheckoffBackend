@@ -337,6 +337,25 @@ class AdminVerify2FASerializer(serializers.Serializer):
         return value
 
 
+class VerifyLoginOTPSerializer(serializers.Serializer):
+    """
+    Serializer for verifying OTP sent after login (for HR/Admin).
+
+    Used in the OTP-after-login flow where credentials are verified first,
+    then an OTP is sent to the user's phone, and finally the OTP must be
+    verified before issuing tokens.
+    """
+
+    temp_token = serializers.CharField(help_text="Temporary token from login step")
+    otp = serializers.CharField(min_length=6, max_length=6, help_text="6-digit OTP code")
+
+    def validate_otp(self, value):
+        """Validate OTP format."""
+        if not value.isdigit():
+            raise serializers.ValidationError('OTP must contain only digits.')
+        return value
+
+
 class UpdateProfileSerializer(serializers.Serializer):
     """Serializer for updating user profile."""
 

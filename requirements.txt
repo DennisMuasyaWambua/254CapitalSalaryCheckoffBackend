@@ -47,8 +47,11 @@ django-auditlog==3.0.0
 # Filtering
 django-filter==24.3
 
-# SMS Gateway (Africa's Talking)
+# SMS Gateway (Africa's Talking - Legacy)
 africastalking==1.2.5
+
+# SMS Gateway (Wasiliana - Current)
+pytek-wasiliana==1.2
 
 # Utilities
 python-dateutil==2.9.0

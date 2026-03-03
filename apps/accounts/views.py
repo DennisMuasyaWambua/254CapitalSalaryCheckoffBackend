@@ -18,7 +18,7 @@ import logging
 from .serializers import (
     SendOTPSerializer, VerifyOTPSerializer, RegisterEmployeeSerializer,
     HRLoginSerializer, AdminLoginSerializer, AdminVerify2FASerializer,
-    UserSerializer, UpdateProfileSerializer
+    VerifyLoginOTPSerializer, UserSerializer, UpdateProfileSerializer
 )
 from .otp import generate_otp, store_otp, verify_otp, can_request_new_otp
 from .models import CustomUser
@@ -227,31 +227,191 @@ class RegisterEmployeeView(APIView):
 class HRLoginView(APIView):
     """
     POST /api/v1/auth/hr/login/
-    Email/password login for HR managers.
+    Email/password login for HR managers (step 1 of OTP login).
+
+    Returns temporary token and sends OTP via SMS.
     """
 
     permission_classes = [AllowAny]
 
     def post(self, request):
-        """Authenticate HR user."""
+        """Authenticate HR user and send OTP."""
         serializer = HRLoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         user = serializer.validated_data['user']
 
-        # Generate tokens
+        # Check if user has phone number
+        if not user.phone_number:
+            return Response(
+                {'detail': 'No phone number on file. Please contact administrator.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Generate temporary token (expires in 5 minutes)
+        temp_token = RefreshToken.for_user(user)
+        temp_token.set_exp(lifetime=timezone.timedelta(minutes=5))
+
+        # Generate OTP
+        otp_code = generate_otp()
+
+        # Store OTP in Redis
+        otp_info = store_otp(user.phone_number, otp_code)
+
+        # Send OTP via SMS (async Celery task)
+        from apps.notifications.tasks import send_otp_sms
+        send_otp_sms.delay(user.phone_number, otp_code)
+
+        # Store user ID in cache for OTP verification
+        cache.set(
+            f'login_otp_pending:{str(temp_token)}',
+            str(user.id),
+            timeout=300  # 5 minutes
+        )
+
+        logger.info(f'HR login OTP sent to {otp_info["masked_phone"]}')
+
+        # In development, log OTP for testing
+        if settings.DEBUG:
+            logger.info(f'[DEV] OTP for {user.phone_number}: {otp_code}')
+
+        return Response({
+            'detail': 'OTP sent to your phone. Please verify to complete login.',
+            'requires_otp': True,
+            'temp_token': str(temp_token.access_token),
+            'masked_phone': otp_info['masked_phone'],
+            'expires_in': otp_info['expires_in']
+        }, status=status.HTTP_200_OK)
+
+
+class AdminLoginView(APIView):
+    """
+    POST /api/v1/auth/admin/login/
+    Email/password login for admins (step 1 of OTP login).
+
+    Returns temporary token and sends OTP via SMS.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """Authenticate admin user and send OTP."""
+        serializer = AdminLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = serializer.validated_data['user']
+
+        # Check if user has phone number
+        if not user.phone_number:
+            return Response(
+                {'detail': 'No phone number on file. Please contact administrator.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Generate temporary token (expires in 5 minutes)
+        temp_token = RefreshToken.for_user(user)
+        temp_token.set_exp(lifetime=timezone.timedelta(minutes=5))
+
+        # Generate OTP
+        otp_code = generate_otp()
+
+        # Store OTP in Redis
+        otp_info = store_otp(user.phone_number, otp_code)
+
+        # Send OTP via SMS (async Celery task)
+        from apps.notifications.tasks import send_otp_sms
+        send_otp_sms.delay(user.phone_number, otp_code)
+
+        # Store user ID in cache for OTP verification
+        cache.set(
+            f'login_otp_pending:{str(temp_token)}',
+            str(user.id),
+            timeout=300  # 5 minutes
+        )
+
+        logger.info(f'Admin login OTP sent to {otp_info["masked_phone"]}')
+
+        # In development, log OTP for testing
+        if settings.DEBUG:
+            logger.info(f'[DEV] OTP for {user.phone_number}: {otp_code}')
+
+        return Response({
+            'detail': 'OTP sent to your phone. Please verify to complete login.',
+            'requires_otp': True,
+            'temp_token': str(temp_token.access_token),
+            'masked_phone': otp_info['masked_phone'],
+            'expires_in': otp_info['expires_in']
+        }, status=status.HTTP_200_OK)
+
+
+class VerifyLoginOTPView(APIView):
+    """
+    POST /api/v1/auth/verify-login-otp/
+    Verify OTP for HR/Admin login (step 2 of OTP login).
+
+    Returns full JWT tokens on success.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """Verify login OTP code."""
+        serializer = VerifyLoginOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        temp_token = serializer.validated_data['temp_token']
+        otp = serializer.validated_data['otp']
+
+        # Get user ID from cache
+        user_id = cache.get(f'login_otp_pending:{temp_token}')
+        if not user_id:
+            return Response(
+                {'detail': 'OTP session expired or invalid. Please log in again.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get user
+        try:
+            user = CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            return Response(
+                {'detail': 'Invalid user.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Verify role is HR or Admin
+        if user.role not in ['hr_manager', 'admin']:
+            return Response(
+                {'detail': 'Invalid user role for this endpoint.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Verify OTP
+        is_valid, error_message = verify_otp(user.phone_number, otp)
+
+        if not is_valid:
+            return Response(
+                {'detail': error_message},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Clear OTP pending from cache
+        cache.delete(f'login_otp_pending:{temp_token}')
+
+        # Generate full tokens
         tokens = get_tokens_for_user(user)
 
         # Log login
+        action_name = 'HR login with OTP' if user.role == 'hr_manager' else 'Admin login with OTP'
         AuditLog.log(
-            action='HR login',
+            action=action_name,
             actor=user,
             target_type='CustomUser',
             target_id=user.id,
             ip_address=get_client_ip(request)
         )
 
-        logger.info(f'HR user logged in: {user.id}')
+        logger.info(f'{user.role.upper()} user logged in with OTP: {user.id}')
 
         return Response({
             'detail': 'Login successful',
@@ -260,47 +420,13 @@ class HRLoginView(APIView):
         }, status=status.HTTP_200_OK)
 
 
-class AdminLoginView(APIView):
-    """
-    POST /api/v1/auth/admin/login/
-    Email/password login for admins (step 1 of 2FA).
-
-    Returns temporary token for 2FA verification.
-    """
-
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        """Authenticate admin user (step 1)."""
-        serializer = AdminLoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        user = serializer.validated_data['user']
-
-        # Generate temporary token (expires in 5 minutes)
-        temp_token = RefreshToken.for_user(user)
-        temp_token.set_exp(lifetime=timezone.timedelta(minutes=5))
-
-        # Store user ID in cache for 2FA verification
-        cache.set(
-            f'2fa_pending:{str(temp_token)}',
-            str(user.id),
-            timeout=300  # 5 minutes
-        )
-
-        logger.info(f'Admin 2FA pending: {user.id}')
-
-        return Response({
-            'detail': '2FA verification required',
-            'requires_2fa': True,
-            'temp_token': str(temp_token.access_token)
-        }, status=status.HTTP_200_OK)
-
-
 class AdminVerify2FAView(APIView):
     """
     POST /api/v1/auth/admin/verify-2fa/
     Verify TOTP code for admin (step 2 of 2FA).
+
+    DEPRECATED: This endpoint is kept for backward compatibility.
+    Use VerifyLoginOTPView for OTP-based authentication.
 
     Returns full JWT tokens on success.
     """
