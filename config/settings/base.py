@@ -211,7 +211,7 @@ SIMPLE_JWT = {
 # CORS Configuration
 CORS_ALLOWED_ORIGINS = env.list(
     'CORS_ALLOWED_ORIGINS',
-    default=['http://localhost:3000', 'http://127.0.0.1:3000','254-capital.com', '254-capital.vercel.app']
+    default=['http://localhost:3000', 'http://127.0.0.1:3000','https://254-capital.com', 'https://254-capital.vercel.app']
 )
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
