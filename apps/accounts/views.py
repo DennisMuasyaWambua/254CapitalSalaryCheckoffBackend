@@ -261,7 +261,7 @@ class HRLoginView(APIView):
 
         # Store user ID in cache for OTP verification
         cache.set(
-            f'login_otp_pending:{str(temp_token)}',
+            f'login_otp_pending:{str(temp_token.access_token)}',
             str(user.id),
             timeout=300  # 5 minutes
         )
@@ -317,7 +317,7 @@ class AdminLoginView(APIView):
 
         # Store user ID in cache for OTP verification
         cache.set(
-            f'login_otp_pending:{str(temp_token)}',
+            f'login_otp_pending:{str(temp_token.access_token)}',
             str(user.id),
             timeout=300  # 5 minutes
         )
