@@ -70,7 +70,9 @@ class AuditLog(models.Model):
         """
         Override save to only allow creation, not updates.
         """
-        if self.pk is not None:
+        # Check if this is an update (not a new record being created)
+        # _state.adding is True for new records, False for updates
+        if not self._state.adding and self.pk is not None:
             raise ValueError('AuditLog records cannot be modified after creation')
         super().save(*args, **kwargs)
 
