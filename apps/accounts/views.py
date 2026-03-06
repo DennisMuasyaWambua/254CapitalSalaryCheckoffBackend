@@ -13,6 +13,7 @@ from rest_framework_simplejwt.views import TokenRefreshView as SimpleJWTTokenRef
 from django_otp.plugins.otp_totp.models import TOTPDevice
 from django.core.cache import cache
 from django.utils import timezone
+from django.conf import settings
 import logging
 
 from .serializers import (
@@ -83,10 +84,6 @@ class SendOTPView(APIView):
         send_otp_sms.delay(phone_number, otp_code)
 
         logger.info(f'OTP sent to {otp_info["masked_phone"]}')
-
-        # In development, log OTP for testing
-        if settings.DEBUG:
-            logger.info(f'[DEV] OTP for {phone_number}: {otp_code}')
 
         return Response({
             'detail': 'OTP sent successfully',
@@ -271,10 +268,6 @@ class HRLoginView(APIView):
 
         logger.info(f'HR login OTP sent to {otp_info["masked_phone"]}')
 
-        # In development, log OTP for testing
-        if settings.DEBUG:
-            logger.info(f'[DEV] OTP for {user.phone_number}: {otp_code}')
-
         return Response({
             'detail': 'OTP sent to your phone. Please verify to complete login.',
             'requires_otp': True,
@@ -330,10 +323,6 @@ class AdminLoginView(APIView):
         )
 
         logger.info(f'Admin login OTP sent to {otp_info["masked_phone"]}')
-
-        # In development, log OTP for testing
-        if settings.DEBUG:
-            logger.info(f'[DEV] OTP for {user.phone_number}: {otp_code}')
 
         return Response({
             'detail': 'OTP sent to your phone. Please verify to complete login.',

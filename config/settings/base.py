@@ -108,6 +108,12 @@ DATABASES = {
 # Custom User Model
 AUTH_USER_MODEL = 'accounts.CustomUser'
 
+# Authentication Backends
+AUTHENTICATION_BACKENDS = [
+    'apps.accounts.backends.EmailOrUsernameBackend',  # Custom backend for email/username auth
+    'django.contrib.auth.backends.ModelBackend',  # Fallback to default
+]
+
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
 AUTH_PASSWORD_VALIDATORS = [
@@ -286,7 +292,7 @@ AFRICASTALKING_API_KEY = env('AFRICASTALKING_API_KEY', default='')
 AFRICASTALKING_SENDER_ID = env('AFRICASTALKING_SENDER_ID', default='254CAPITAL')
 
 # Wasiliana SMS Configuration (Current)
-WASILIANA_API_KEY = env('WASILIANA_API_KEY', default='cLASQNLUPha4ryxweSJI2jKqNhyZrUs2HPnLDhDahs5eYufyTpOucPCjAtHckRfk')
+WASILIANA_API_KEY = env('WASILIANA_API_KEY')  # Required in production
 WASILIANA_SENDER_ID = env('WASILIANA_SENDER_ID', default='254-CAPITAL')
 
 # OTP Configuration
