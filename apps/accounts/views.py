@@ -249,6 +249,10 @@ class HRLoginView(APIView):
         temp_token = RefreshToken.for_user(user)
         temp_token.set_exp(lifetime=timezone.timedelta(minutes=5))
 
+        # CRITICAL: Generate access token ONCE and reuse it
+        # Each call to temp_token.access_token creates a NEW token with different JTI
+        access_token_str = str(temp_token.access_token)
+
         # Generate OTP
         otp_code = generate_otp()
 
@@ -260,7 +264,7 @@ class HRLoginView(APIView):
         send_otp_sms.delay(user.phone_number, otp_code)
 
         # Store user ID in cache for OTP verification
-        cache_key = f'login_otp_pending:{str(temp_token.access_token)}'
+        cache_key = f'login_otp_pending:{access_token_str}'
         cache.set(
             cache_key,
             str(user.id),
@@ -270,13 +274,13 @@ class HRLoginView(APIView):
         # Verify cache was set successfully
         cached_value = cache.get(cache_key)
         logger.info(f'HR login OTP sent to {otp_info["masked_phone"]}')
-        logger.info(f'Cache set: key={cache_key}, user_id={user.id}, token={str(temp_token.access_token)[:20]}...')
+        logger.info(f'Cache set: key={cache_key}, user_id={user.id}, token={access_token_str[:20]}...')
         logger.info(f'Cache verify: immediate get returned {cached_value}, matches={cached_value == str(user.id)}')
 
         return Response({
             'detail': 'OTP sent to your phone. Please verify to complete login.',
             'requires_otp': True,
-            'temp_token': str(temp_token.access_token),
+            'temp_token': access_token_str,
             'masked_phone': otp_info['masked_phone'],
             'expires_in': otp_info['expires_in']
         }, status=status.HTTP_200_OK)
@@ -310,6 +314,10 @@ class AdminLoginView(APIView):
         temp_token = RefreshToken.for_user(user)
         temp_token.set_exp(lifetime=timezone.timedelta(minutes=5))
 
+        # CRITICAL: Generate access token ONCE and reuse it
+        # Each call to temp_token.access_token creates a NEW token with different JTI
+        access_token_str = str(temp_token.access_token)
+
         # Generate OTP
         otp_code = generate_otp()
 
@@ -321,7 +329,7 @@ class AdminLoginView(APIView):
         send_otp_sms.delay(user.phone_number, otp_code)
 
         # Store user ID in cache for OTP verification
-        cache_key = f'login_otp_pending:{str(temp_token.access_token)}'
+        cache_key = f'login_otp_pending:{access_token_str}'
         cache.set(
             cache_key,
             str(user.id),
@@ -331,13 +339,13 @@ class AdminLoginView(APIView):
         # Verify cache was set successfully
         cached_value = cache.get(cache_key)
         logger.info(f'Admin login OTP sent to {otp_info["masked_phone"]}')
-        logger.info(f'Cache set: key={cache_key}, user_id={user.id}, token={str(temp_token.access_token)[:20]}...')
+        logger.info(f'Cache set: key={cache_key}, user_id={user.id}, token={access_token_str[:20]}...')
         logger.info(f'Cache verify: immediate get returned {cached_value}, matches={cached_value == str(user.id)}')
 
         return Response({
             'detail': 'OTP sent to your phone. Please verify to complete login.',
             'requires_otp': True,
-            'temp_token': str(temp_token.access_token),
+            'temp_token': access_token_str,
             'masked_phone': otp_info['masked_phone'],
             'expires_in': otp_info['expires_in']
         }, status=status.HTTP_200_OK)
