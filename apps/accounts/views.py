@@ -260,13 +260,18 @@ class HRLoginView(APIView):
         send_otp_sms.delay(user.phone_number, otp_code)
 
         # Store user ID in cache for OTP verification
+        cache_key = f'login_otp_pending:{str(temp_token.access_token)}'
         cache.set(
-            f'login_otp_pending:{str(temp_token.access_token)}',
+            cache_key,
             str(user.id),
             timeout=300  # 5 minutes
         )
 
+        # Verify cache was set successfully
+        cached_value = cache.get(cache_key)
         logger.info(f'HR login OTP sent to {otp_info["masked_phone"]}')
+        logger.info(f'Cache set: key={cache_key}, user_id={user.id}, token={str(temp_token.access_token)[:20]}...')
+        logger.info(f'Cache verify: immediate get returned {cached_value}, matches={cached_value == str(user.id)}')
 
         return Response({
             'detail': 'OTP sent to your phone. Please verify to complete login.',
@@ -316,13 +321,18 @@ class AdminLoginView(APIView):
         send_otp_sms.delay(user.phone_number, otp_code)
 
         # Store user ID in cache for OTP verification
+        cache_key = f'login_otp_pending:{str(temp_token.access_token)}'
         cache.set(
-            f'login_otp_pending:{str(temp_token.access_token)}',
+            cache_key,
             str(user.id),
             timeout=300  # 5 minutes
         )
 
+        # Verify cache was set successfully
+        cached_value = cache.get(cache_key)
         logger.info(f'Admin login OTP sent to {otp_info["masked_phone"]}')
+        logger.info(f'Cache set: key={cache_key}, user_id={user.id}, token={str(temp_token.access_token)[:20]}...')
+        logger.info(f'Cache verify: immediate get returned {cached_value}, matches={cached_value == str(user.id)}')
 
         return Response({
             'detail': 'OTP sent to your phone. Please verify to complete login.',
@@ -352,8 +362,12 @@ class VerifyLoginOTPView(APIView):
         otp = serializer.validated_data['otp']
 
         # Get user ID from cache
-        user_id = cache.get(f'login_otp_pending:{temp_token}')
+        cache_key = f'login_otp_pending:{temp_token}'
+        user_id = cache.get(cache_key)
+        logger.info(f'Cache lookup: key={cache_key}, found={user_id is not None}, token={temp_token[:20]}...')
+
         if not user_id:
+            logger.error(f'Cache miss for key={cache_key}')
             return Response(
                 {'detail': 'OTP session expired or invalid. Please log in again.'},
                 status=status.HTTP_400_BAD_REQUEST
