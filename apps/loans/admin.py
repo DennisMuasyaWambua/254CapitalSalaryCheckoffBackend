@@ -3,7 +3,7 @@ Django admin configuration for loan models.
 """
 
 from django.contrib import admin
-from .models import LoanApplication, LoanStatusHistory, RepaymentSchedule
+from .models import LoanApplication, LoanStatusHistory, RepaymentSchedule, ManualPayment
 
 
 class LoanStatusHistoryInline(admin.TabularInline):
@@ -81,3 +81,74 @@ class RepaymentScheduleAdmin(admin.ModelAdmin):
     search_fields = ['loan__application_number', 'loan__employee__first_name', 'loan__employee__last_name']
     readonly_fields = ['loan', 'installment_number', 'due_date', 'amount', 'running_balance', 'is_first_deduction']
     ordering = ['loan', 'installment_number']
+
+
+@admin.register(ManualPayment)
+class ManualPaymentAdmin(admin.ModelAdmin):
+    """Admin interface for ManualPayment model."""
+
+    list_display = [
+        'loan',
+        'payment_date',
+        'amount_received',
+        'payment_method',
+        'reference_number',
+        'early_payment_discount_applied',
+        'discount_amount',
+        'recorded_by',
+        'created_at',
+    ]
+
+    list_filter = [
+        'payment_method',
+        'early_payment_discount_applied',
+        'payment_date',
+        'created_at',
+    ]
+
+    search_fields = [
+        'loan__application_number',
+        'loan__employee__first_name',
+        'loan__employee__last_name',
+        'reference_number',
+    ]
+
+    readonly_fields = [
+        'id',
+        'recorded_by',
+        'created_at',
+        'updated_at',
+    ]
+
+    fieldsets = (
+        ('Payment Information', {
+            'fields': (
+                'loan',
+                'payment_date',
+                'amount_received',
+                'payment_method',
+                'reference_number',
+            )
+        }),
+        ('Discount Details', {
+            'fields': (
+                'early_payment_discount_applied',
+                'discount_amount',
+            )
+        }),
+        ('Notes', {
+            'fields': ('notes',)
+        }),
+        ('Metadata', {
+            'fields': (
+                'id',
+                'recorded_by',
+                'created_at',
+                'updated_at',
+            )
+        }),
+    )
+
+    def has_delete_permission(self, request, obj=None):
+        """Only admins can delete payment records."""
+        return request.user.is_superuser

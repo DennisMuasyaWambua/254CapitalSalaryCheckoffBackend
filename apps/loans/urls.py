@@ -23,4 +23,7 @@ urlpatterns = [
     path('admin/queue/', views.AdminAssessmentQueueView.as_view(), name='admin-queue'),
     path('admin/<uuid:pk>/assess/', views.AdminCreditAssessmentView.as_view(), name='admin-assess'),
     path('admin/<uuid:pk>/disburse/', views.AdminDisbursementView.as_view(), name='admin-disburse'),
+
+    # Payment management endpoints
+    path('search/', views.LoanSearchView.as_view(), name='loan-search'),
 ]

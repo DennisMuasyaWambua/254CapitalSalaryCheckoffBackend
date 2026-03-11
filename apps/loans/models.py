@@ -303,3 +303,82 @@ class RepaymentSchedule(models.Model):
         if self.is_paid:
             return False
         return self.due_date < timezone.now().date()
+
+
+class ManualPayment(models.Model):
+    """
+    Model for recording manual payments outside the regular payroll cycle.
+
+    Used for tracking ad-hoc payments made by clients such as early payments,
+    partial payments, or settlements.
+    """
+
+    PAYMENT_METHOD_CHOICES = [
+        ('mpesa', 'M-Pesa'),
+        ('bank', 'Bank Transfer'),
+        ('cash', 'Cash'),
+        ('cheque', 'Cheque'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    loan = models.ForeignKey(
+        LoanApplication,
+        on_delete=models.CASCADE,
+        related_name='manual_payments',
+        help_text='Loan application this payment is for'
+    )
+    payment_date = models.DateField(help_text='Date when payment was received')
+    amount_received = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        help_text='Amount received in this payment'
+    )
+    payment_method = models.CharField(
+        max_length=10,
+        choices=PAYMENT_METHOD_CHOICES,
+        help_text='Method of payment'
+    )
+    reference_number = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text='Transaction reference number (e.g., M-Pesa code)'
+    )
+    notes = models.TextField(
+        blank=True,
+        null=True,
+        help_text='Additional notes about this payment'
+    )
+    early_payment_discount_applied = models.BooleanField(
+        default=False,
+        help_text='Whether early payment discount was applied'
+    )
+    discount_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text='Discount amount if early payment'
+    )
+    recorded_by = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='recorded_manual_payments',
+        help_text='Admin who recorded this payment'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'manual_payments'
+        ordering = ['-payment_date']
+        verbose_name = 'Manual Payment'
+        verbose_name_plural = 'Manual Payments'
+        indexes = [
+            models.Index(fields=['loan', 'payment_date']),
+            models.Index(fields=['payment_date']),
+            models.Index(fields=['payment_method']),
+        ]
+
+    def __str__(self):
+        return f"Payment KES {self.amount_received:,.2f} for {self.loan.application_number}"

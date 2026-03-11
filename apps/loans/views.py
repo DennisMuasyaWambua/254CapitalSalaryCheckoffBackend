@@ -747,3 +747,233 @@ class AdminDisbursementView(APIView):
             'detail': 'Loan disbursed successfully',
             'application': LoanApplicationDetailSerializer(app).data
         }, status=status.HTTP_200_OK)
+
+
+class LoanSearchView(APIView):
+    """
+    GET /api/v1/loans/search/?q=<search_term>
+    Search loans by employee name, ID, mobile, or application number.
+    """
+
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get(self, request):
+        """Search for loans."""
+        query = request.query_params.get('q', '').strip()
+
+        if not query:
+            return Response({
+                'error': 'Search query parameter "q" is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Search loans
+        loans = LoanApplication.objects.filter(
+            Q(application_number__icontains=query) |
+            Q(employee__first_name__icontains=query) |
+            Q(employee__last_name__icontains=query) |
+            Q(employee__phone__icontains=query) |
+            Q(employee__national_id__icontains=query)
+        ).select_related('employee', 'employer').filter(
+            status=LoanApplication.Status.DISBURSED
+        )[:20]  # Limit to 20 results
+
+        results = []
+        for loan in loans:
+            results.append({
+                'id': str(loan.id),
+                'application_number': loan.application_number,
+                'employee_name': loan.employee.get_full_name(),
+                'employee_mobile': loan.employee.phone,
+                'employer_name': loan.employer.name,
+                'principal_amount': str(loan.principal_amount),
+                'total_repayment': str(loan.total_repayment),
+                'outstanding_balance': str(loan.outstanding_balance),
+                'disbursement_date': loan.disbursement_date.isoformat() if loan.disbursement_date else None,
+            })
+
+        return Response({
+            'count': len(results),
+            'results': results
+        })
+
+
+class RecordPaymentView(APIView):
+    """
+    POST /api/v1/payments/record/
+    Record a manual payment for a loan.
+    """
+
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request):
+        """Record manual payment."""
+        from .serializers import RecordPaymentSerializer
+        from .models import ManualPayment
+
+        serializer = RecordPaymentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        loan_id = serializer.validated_data['loan_id']
+        payment_date = serializer.validated_data['payment_date']
+        amount_received = serializer.validated_data['amount_received']
+        payment_method = serializer.validated_data['payment_method']
+        reference_number = serializer.validated_data.get('reference_number', '')
+        notes = serializer.validated_data.get('notes', '')
+        apply_discount = serializer.validated_data.get('apply_early_payment_discount', False)
+
+        # Get loan
+        try:
+            loan = LoanApplication.objects.get(id=loan_id)
+        except LoanApplication.DoesNotExist:
+            return Response({
+                'error': 'Loan not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        if loan.status != LoanApplication.Status.DISBURSED:
+            return Response({
+                'error': 'Can only record payments for disbursed loans'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        discount_amount = Decimal('0.00')
+
+        # Calculate early payment discount if requested
+        if apply_discount:
+            from datetime import datetime
+            from math import ceil
+
+            # Calculate actual months since start
+            start_date = loan.disbursement_date
+            days_difference = (payment_date - start_date).days
+            actual_months = max(1, ceil(days_difference / 30))
+
+            # Calculate adjusted interest
+            principal = loan.principal_amount
+            interest_rate = loan.interest_rate
+            original_months = loan.repayment_months
+
+            adjusted_interest = principal * interest_rate * Decimal(str(actual_months))
+            original_interest = principal * interest_rate * Decimal(str(original_months))
+
+            discount_amount = original_interest - adjusted_interest
+
+            if discount_amount < 0:
+                discount_amount = Decimal('0.00')
+
+        # Create payment record
+        payment = ManualPayment.objects.create(
+            loan=loan,
+            payment_date=payment_date,
+            amount_received=amount_received,
+            payment_method=payment_method,
+            reference_number=reference_number,
+            notes=notes,
+            early_payment_discount_applied=apply_discount,
+            discount_amount=discount_amount,
+            recorded_by=request.user
+        )
+
+        # Update loan's repayment schedule
+        # Mark installments as paid based on amount received
+        remaining_amount = amount_received
+        unpaid_schedules = RepaymentSchedule.objects.filter(
+            loan=loan,
+            is_paid=False
+        ).order_by('installment_number')
+
+        for schedule in unpaid_schedules:
+            if remaining_amount >= schedule.amount:
+                schedule.is_paid = True
+                schedule.paid_date = payment_date
+                schedule.save()
+                remaining_amount -= schedule.amount
+            else:
+                break
+
+        # Log payment
+        AuditLog.log(
+            action=f'Manual payment recorded: {loan.application_number}',
+            actor=request.user,
+            target_type='LoanApplication',
+            target_id=loan.id,
+            metadata={
+                'amount': str(amount_received),
+                'method': payment_method,
+                'reference': reference_number,
+                'discount': str(discount_amount) if apply_discount else '0.00'
+            },
+            ip_address=get_client_ip(request)
+        )
+
+        # TODO: Send SMS notification to employee
+
+        return Response({
+            'detail': 'Payment recorded successfully',
+            'payment': {
+                'id': str(payment.id),
+                'amount_received': str(payment.amount_received),
+                'discount_amount': str(payment.discount_amount),
+                'payment_date': payment.payment_date.isoformat(),
+                'outstanding_balance': str(loan.outstanding_balance)
+            }
+        }, status=status.HTTP_201_CREATED)
+
+
+class CalculateDiscountView(APIView):
+    """
+    POST /api/v1/payments/calculate-discount/
+    Calculate early payment discount for a loan.
+    """
+
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request):
+        """Calculate early payment discount."""
+        from .serializers import EarlyPaymentDiscountSerializer
+        from datetime import datetime
+        from math import ceil
+
+        serializer = EarlyPaymentDiscountSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        loan_id = serializer.validated_data['loan_id']
+        payment_date = serializer.validated_data['payment_date']
+
+        # Get loan
+        try:
+            loan = LoanApplication.objects.get(id=loan_id)
+        except LoanApplication.DoesNotExist:
+            return Response({
+                'error': 'Loan not found'
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        # Calculate actual months
+        start_date = loan.disbursement_date
+        days_difference = (payment_date - start_date).days
+        actual_months = max(1, ceil(days_difference / 30))
+
+        # Calculate discount
+        principal = loan.principal_amount
+        interest_rate = loan.interest_rate
+        original_months = loan.repayment_months
+
+        original_interest = principal * interest_rate * Decimal(str(original_months))
+        adjusted_interest = principal * interest_rate * Decimal(str(actual_months))
+
+        discount = max(Decimal('0.00'), original_interest - adjusted_interest)
+
+        new_total_due = principal + adjusted_interest
+        new_outstanding = new_total_due - loan.total_paid
+
+        return Response({
+            'loan_id': str(loan.id),
+            'application_number': loan.application_number,
+            'original_interest': str(original_interest),
+            'adjusted_interest': str(adjusted_interest),
+            'discount_amount': str(discount),
+            'original_total_due': str(loan.total_repayment),
+            'new_total_due': str(new_total_due),
+            'amount_paid': str(loan.total_paid),
+            'new_outstanding_balance': str(new_outstanding),
+            'actual_months': actual_months,
+            'original_months': original_months
+        })

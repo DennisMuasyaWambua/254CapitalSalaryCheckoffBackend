@@ -5,7 +5,7 @@ Serializers for loan applications and repayment.
 from rest_framework import serializers
 from decimal import Decimal
 from django.conf import settings
-from .models import LoanApplication, LoanStatusHistory, RepaymentSchedule
+from .models import LoanApplication, LoanStatusHistory, RepaymentSchedule, ManualPayment
 from apps.accounts.serializers import UserSerializer
 from apps.employers.serializers import EmployerListSerializer
 
@@ -326,3 +326,97 @@ class LoanApplicationUpdateSerializer(serializers.ModelSerializer):
 
         instance.save()
         return instance
+
+
+class ManualPaymentSerializer(serializers.ModelSerializer):
+    """Serializer for manual payment records."""
+
+    loan_number = serializers.CharField(source='loan.application_number', read_only=True)
+    employee_name = serializers.CharField(source='loan.employee.get_full_name', read_only=True)
+    recorded_by_name = serializers.CharField(source='recorded_by.get_full_name', read_only=True)
+
+    class Meta:
+        model = ManualPayment
+        fields = [
+            'id',
+            'loan',
+            'loan_number',
+            'employee_name',
+            'payment_date',
+            'amount_received',
+            'payment_method',
+            'reference_number',
+            'notes',
+            'early_payment_discount_applied',
+            'discount_amount',
+            'recorded_by',
+            'recorded_by_name',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = ['id', 'recorded_by', 'created_at', 'updated_at']
+
+    def validate_amount_received(self, value):
+        """Validate payment amount."""
+        if value <= 0:
+            raise serializers.ValidationError("Payment amount must be greater than 0.")
+        return value
+
+    def validate(self, attrs):
+        """Validate the entire payment record."""
+        loan = attrs.get('loan')
+
+        if loan and loan.status != LoanApplication.Status.DISBURSED:
+            raise serializers.ValidationError({
+                'loan': 'Can only record payments for disbursed loans.'
+            })
+
+        return attrs
+
+
+class LoanSearchSerializer(serializers.Serializer):
+    """Serializer for loan search."""
+
+    q = serializers.CharField(
+        required=True,
+        help_text='Search query (employee name, ID, mobile, or application number)'
+    )
+
+
+class EarlyPaymentDiscountSerializer(serializers.Serializer):
+    """Serializer for early payment discount calculation."""
+
+    loan_id = serializers.UUIDField(required=True)
+    payment_date = serializers.DateField(required=True)
+
+    def validate_loan_id(self, value):
+        """Validate that loan exists."""
+        from .models import LoanApplication
+        try:
+            loan = LoanApplication.objects.get(id=value)
+            if loan.status != LoanApplication.Status.DISBURSED:
+                raise serializers.ValidationError("Loan must be disbursed.")
+        except LoanApplication.DoesNotExist:
+            raise serializers.ValidationError("Loan not found.")
+        return value
+
+
+class RecordPaymentSerializer(serializers.Serializer):
+    """Serializer for recording manual payments."""
+
+    loan_id = serializers.UUIDField(required=True)
+    payment_date = serializers.DateField(required=True)
+    amount_received = serializers.DecimalField(max_digits=12, decimal_places=2, required=True)
+    payment_method = serializers.ChoiceField(
+        choices=['mpesa', 'bank', 'cash', 'cheque'],
+        required=True
+    )
+    reference_number = serializers.CharField(required=False, allow_blank=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    apply_early_payment_discount = serializers.BooleanField(default=False)
+
+    def validate_amount_received(self, value):
+        """Validate payment amount."""
+        if value <= 0:
+            raise serializers.ValidationError("Payment amount must be greater than 0.")
+        return value
