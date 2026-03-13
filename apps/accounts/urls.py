@@ -26,4 +26,8 @@ urlpatterns = [
 
     # Profile management
     path('profile/', views.ProfileView.as_view(), name='profile'),
+
+    # Password reset
+    path('password-reset/request/', views.RequestPasswordResetView.as_view(), name='password-reset-request'),
+    path('password-reset/confirm/', views.ResetPasswordView.as_view(), name='password-reset-confirm'),
 ]

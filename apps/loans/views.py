@@ -29,6 +29,7 @@ from .services import (
 from apps.accounts.permissions import IsEmployee, IsHRManager, IsAdmin, IsHROrAdmin
 from common.pagination import StandardPagination
 from common.utils import get_client_ip
+from common.email_service import send_email, send_internal_alert
 from apps.audit.models import AuditLog
 import logging
 
@@ -132,6 +133,81 @@ class LoanApplicationListCreateView(APIView):
         )
 
         logger.info(f'Loan application submitted: {loan.application_number}')
+
+        # Send email notification to employee if they have email
+        if request.user.email:
+            try:
+                subject = 'Loan Application Submitted - 254 Capital'
+                body_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                        .header {{ background-color: #3498db; color: white; padding: 20px; text-align: center; }}
+                        .content {{ padding: 20px; background-color: #f9f9f9; }}
+                        .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+                        .info-box {{ background-color: #e8f4fd; border-left: 4px solid #3498db; padding: 15px; margin: 15px 0; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="header">
+                            <h1>Application Submitted</h1>
+                        </div>
+                        <div class="content">
+                            <h2>Hello {request.user.get_full_name()},</h2>
+                            <p>Your loan application has been successfully submitted and is now under review.</p>
+
+                            <div class="info-box">
+                                <p><strong>Application Details:</strong></p>
+                                <ul>
+                                    <li><strong>Application Number:</strong> {loan.application_number}</li>
+                                    <li><strong>Loan Amount:</strong> KES {loan.principal_amount:,.2f}</li>
+                                    <li><strong>Repayment Period:</strong> {loan.repayment_months} months</li>
+                                    <li><strong>Monthly Deduction:</strong> KES {loan.monthly_deduction:,.2f}</li>
+                                    <li><strong>Total Repayment:</strong> KES {loan.total_repayment:,.2f}</li>
+                                </ul>
+                            </div>
+
+                            <p>You will receive updates on your application status.</p>
+
+                            <p>Best regards,<br>
+                            <strong>254 Capital Team</strong></p>
+                        </div>
+                        <div class="footer">
+                            <p>&copy; 2026 254 Capital. All rights reserved.</p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+                send_email(request.user.email, subject, body_html)
+                logger.info(f'Application submission email sent to {request.user.email}')
+            except Exception as e:
+                logger.error(f'Failed to send application submission email: {str(e)}')
+
+        # Send internal alert to admin
+        try:
+            alert_message = f"""
+            <p><strong>New Loan Application Submitted</strong></p>
+            <ul>
+                <li><strong>Application Number:</strong> {loan.application_number}</li>
+                <li><strong>Employee:</strong> {request.user.get_full_name()}</li>
+                <li><strong>Employer:</strong> {employee_profile.employer.name}</li>
+                <li><strong>Loan Amount:</strong> KES {loan.principal_amount:,.2f}</li>
+                <li><strong>Repayment Period:</strong> {loan.repayment_months} months</li>
+            </ul>
+            """
+            send_internal_alert(
+                subject=f'New Loan Application - {loan.application_number}',
+                message=alert_message,
+                alert_type='info'
+            )
+        except Exception as e:
+            logger.error(f'Failed to send internal alert: {str(e)}')
 
         return Response(
             LoanApplicationDetailSerializer(loan).data,
@@ -467,6 +543,105 @@ class HRReviewApplicationView(APIView):
 
         logger.info(f'HR {action}: {app.application_number} by {request.user.id}')
 
+        # Send email notification to employee if they have email
+        if app.employee.email:
+            try:
+                if action == 'approve':
+                    subject = 'Loan Application Update - HR Approved'
+                    body_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <style>
+                            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                            .header {{ background-color: #27ae60; color: white; padding: 20px; text-align: center; }}
+                            .content {{ padding: 20px; background-color: #f9f9f9; }}
+                            .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <div class="header">
+                                <h1>Application Approved by HR</h1>
+                            </div>
+                            <div class="content">
+                                <h2>Hello {app.employee.get_full_name()},</h2>
+                                <p>Your loan application <strong>{app.application_number}</strong> has been approved by your HR department and forwarded to 254 Capital for credit assessment.</p>
+                                <p>You will be notified once the final decision is made.</p>
+                                <p>Best regards,<br>
+                                <strong>254 Capital Team</strong></p>
+                            </div>
+                            <div class="footer">
+                                <p>&copy; 2026 254 Capital. All rights reserved.</p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                else:  # decline
+                    subject = 'Loan Application Update - Decision'
+                    body_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <style>
+                            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                            .header {{ background-color: #e74c3c; color: white; padding: 20px; text-align: center; }}
+                            .content {{ padding: 20px; background-color: #f9f9f9; }}
+                            .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <div class="header">
+                                <h1>Application Update</h1>
+                            </div>
+                            <div class="content">
+                                <h2>Hello {app.employee.get_full_name()},</h2>
+                                <p>We regret to inform you that your loan application <strong>{app.application_number}</strong> was not approved at this time.</p>
+                                <p><strong>HR Comment:</strong> {comment}</p>
+                                <p>Please contact your HR department for more information.</p>
+                                <p>Best regards,<br>
+                                <strong>254 Capital Team</strong></p>
+                            </div>
+                            <div class="footer">
+                                <p>&copy; 2026 254 Capital. All rights reserved.</p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                send_email(app.employee.email, subject, body_html)
+                logger.info(f'HR review email sent to {app.employee.email}')
+            except Exception as e:
+                logger.error(f'Failed to send HR review email: {str(e)}')
+
+        # Send internal alert to admin
+        try:
+            alert_message = f"""
+            <p><strong>HR {action.title()} - Loan Application</strong></p>
+            <ul>
+                <li><strong>Application:</strong> {app.application_number}</li>
+                <li><strong>Employee:</strong> {app.employee.get_full_name()}</li>
+                <li><strong>Employer:</strong> {app.employer.name}</li>
+                <li><strong>Amount:</strong> KES {app.principal_amount:,.2f}</li>
+                <li><strong>Action:</strong> {action.title()}</li>
+                <li><strong>HR Manager:</strong> {request.user.get_full_name()}</li>
+                <li><strong>Comment:</strong> {comment}</li>
+            </ul>
+            """
+            send_internal_alert(
+                subject=f'HR {action.title()} - {app.application_number}',
+                message=alert_message,
+                alert_type='success' if action == 'approve' else 'warning'
+            )
+        except Exception as e:
+            logger.error(f'Failed to send internal alert: {str(e)}')
+
         return Response({
             'detail': status_msg,
             'application': LoanApplicationDetailSerializer(app).data
@@ -659,6 +834,117 @@ class AdminCreditAssessmentView(APIView):
 
         logger.info(f'Admin assessment {action}: {app.application_number}')
 
+        # Send email notification to employee if they have email
+        if app.employee.email:
+            try:
+                if action == 'approve':
+                    subject = 'Loan Application Approved - 254 Capital'
+                    body_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <style>
+                            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                            .header {{ background-color: #27ae60; color: white; padding: 20px; text-align: center; }}
+                            .content {{ padding: 20px; background-color: #f9f9f9; }}
+                            .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+                            .info-box {{ background-color: #e8f5e9; border-left: 4px solid #27ae60; padding: 15px; margin: 15px 0; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <div class="header">
+                                <h1>Loan Approved!</h1>
+                            </div>
+                            <div class="content">
+                                <h2>Congratulations {app.employee.get_full_name()}!</h2>
+                                <p>Your loan application <strong>{app.application_number}</strong> has been approved by 254 Capital.</p>
+
+                                <div class="info-box">
+                                    <p><strong>Loan Details:</strong></p>
+                                    <ul>
+                                        <li><strong>Loan Amount:</strong> KES {app.principal_amount:,.2f}</li>
+                                        <li><strong>Repayment Period:</strong> {app.repayment_months} months</li>
+                                        <li><strong>Monthly Deduction:</strong> KES {app.monthly_deduction:,.2f}</li>
+                                        <li><strong>Total Repayment:</strong> KES {app.total_repayment:,.2f}</li>
+                                    </ul>
+                                </div>
+
+                                <p>Your loan will be disbursed shortly. You will receive notification once disbursement is completed.</p>
+
+                                <p>Best regards,<br>
+                                <strong>254 Capital Team</strong></p>
+                            </div>
+                            <div class="footer">
+                                <p>&copy; 2026 254 Capital. All rights reserved.</p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                else:  # decline
+                    subject = 'Loan Application Update - 254 Capital'
+                    body_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <style>
+                            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                            .header {{ background-color: #e74c3c; color: white; padding: 20px; text-align: center; }}
+                            .content {{ padding: 20px; background-color: #f9f9f9; }}
+                            .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <div class="header">
+                                <h1>Application Decision</h1>
+                            </div>
+                            <div class="content">
+                                <h2>Hello {app.employee.get_full_name()},</h2>
+                                <p>We regret to inform you that your loan application <strong>{app.application_number}</strong> was not approved at this time.</p>
+                                <p>Please contact us if you have any questions.</p>
+                                <p>Best regards,<br>
+                                <strong>254 Capital Team</strong></p>
+                            </div>
+                            <div class="footer">
+                                <p>&copy; 2026 254 Capital. All rights reserved.</p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                send_email(app.employee.email, subject, body_html, cc_address='david.muema@254-capital.com')
+                logger.info(f'Admin assessment email sent to {app.employee.email}')
+            except Exception as e:
+                logger.error(f'Failed to send admin assessment email: {str(e)}')
+
+        # Send internal alert
+        try:
+            alert_message = f"""
+            <p><strong>Loan Application {action.title()} - Credit Assessment</strong></p>
+            <ul>
+                <li><strong>Application:</strong> {app.application_number}</li>
+                <li><strong>Employee:</strong> {app.employee.get_full_name()}</li>
+                <li><strong>Employer:</strong> {app.employer.name}</li>
+                <li><strong>Amount:</strong> KES {app.principal_amount:,.2f}</li>
+                <li><strong>Action:</strong> {action.title()}</li>
+                <li><strong>Admin:</strong> {request.user.get_full_name()}</li>
+                <li><strong>Comment:</strong> {comment}</li>
+            </ul>
+            """
+            send_internal_alert(
+                subject=f'Loan {action.title()} - {app.application_number}',
+                message=alert_message,
+                alert_type='success' if action == 'approve' else 'warning'
+            )
+        except Exception as e:
+            logger.error(f'Failed to send internal alert: {str(e)}')
+
         return Response({
             'detail': status_msg,
             'application': LoanApplicationDetailSerializer(app).data
@@ -742,6 +1028,93 @@ class AdminDisbursementView(APIView):
         )
 
         logger.info(f'Loan disbursed: {app.application_number}')
+
+        # Send email notification to employee if they have email
+        if app.employee.email:
+            try:
+                subject = 'Loan Disbursed - 254 Capital'
+                body_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                        .header {{ background-color: #27ae60; color: white; padding: 20px; text-align: center; }}
+                        .content {{ padding: 20px; background-color: #f9f9f9; }}
+                        .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+                        .info-box {{ background-color: #e8f5e9; border-left: 4px solid #27ae60; padding: 15px; margin: 15px 0; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="header">
+                            <h1>Loan Disbursed!</h1>
+                        </div>
+                        <div class="content">
+                            <h2>Hello {app.employee.get_full_name()},</h2>
+                            <p>Your loan has been successfully disbursed!</p>
+
+                            <div class="info-box">
+                                <p><strong>Disbursement Details:</strong></p>
+                                <ul>
+                                    <li><strong>Application Number:</strong> {app.application_number}</li>
+                                    <li><strong>Loan Amount:</strong> KES {app.principal_amount:,.2f}</li>
+                                    <li><strong>Disbursement Date:</strong> {app.disbursement_date.strftime('%d %B %Y')}</li>
+                                    <li><strong>Disbursement Method:</strong> {app.get_disbursement_method_display()}</li>
+                                    <li><strong>Reference:</strong> {disbursement_reference}</li>
+                                </ul>
+                                <p><strong>Repayment Details:</strong></p>
+                                <ul>
+                                    <li><strong>Monthly Deduction:</strong> KES {app.monthly_deduction:,.2f}</li>
+                                    <li><strong>First Deduction Date:</strong> {app.first_deduction_date.strftime('%d %B %Y')}</li>
+                                    <li><strong>Repayment Period:</strong> {app.repayment_months} months</li>
+                                    <li><strong>Total Repayment:</strong> KES {app.total_repayment:,.2f}</li>
+                                </ul>
+                            </div>
+
+                            <p>Your monthly deductions will begin on {app.first_deduction_date.strftime('%d %B %Y')} through your employer's payroll.</p>
+
+                            <p>Thank you for choosing 254 Capital!</p>
+
+                            <p>Best regards,<br>
+                            <strong>254 Capital Team</strong></p>
+                        </div>
+                        <div class="footer">
+                            <p>&copy; 2026 254 Capital. All rights reserved.</p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+                send_email(app.employee.email, subject, body_html, cc_address='david.muema@254-capital.com')
+                logger.info(f'Disbursement email sent to {app.employee.email}')
+            except Exception as e:
+                logger.error(f'Failed to send disbursement email: {str(e)}')
+
+        # Send internal alert
+        try:
+            alert_message = f"""
+            <p><strong>Loan Disbursed Successfully</strong></p>
+            <ul>
+                <li><strong>Application:</strong> {app.application_number}</li>
+                <li><strong>Employee:</strong> {app.employee.get_full_name()}</li>
+                <li><strong>Employer:</strong> {app.employer.name}</li>
+                <li><strong>Amount Disbursed:</strong> KES {app.principal_amount:,.2f}</li>
+                <li><strong>Disbursement Method:</strong> {app.get_disbursement_method_display()}</li>
+                <li><strong>Reference:</strong> {disbursement_reference}</li>
+                <li><strong>First Deduction Date:</strong> {app.first_deduction_date.strftime('%d %B %Y')}</li>
+                <li><strong>Processed by:</strong> {request.user.get_full_name()}</li>
+            </ul>
+            """
+            send_internal_alert(
+                subject=f'Loan Disbursed - {app.application_number}',
+                message=alert_message,
+                alert_type='success'
+            )
+        except Exception as e:
+            logger.error(f'Failed to send internal alert: {str(e)}')
 
         return Response({
             'detail': 'Loan disbursed successfully',

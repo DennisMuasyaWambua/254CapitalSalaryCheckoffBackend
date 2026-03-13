@@ -13,6 +13,7 @@ This command creates an admin user for the 254 Capital system with:
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from apps.accounts.models import CustomUser
+from common.email_service import send_welcome_email, send_internal_alert
 import getpass
 
 
@@ -154,6 +155,36 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS(f'  Superuser: Yes'))
                 self.stdout.write(self.style.SUCCESS(f'\nYou can now log in at: /api/v1/auth/admin/login/'))
                 self.stdout.write(self.style.WARNING(f'Note: OTP will be sent to {phone} during login\n'))
+
+                # Send welcome email
+                try:
+                    send_welcome_email(
+                        to_address=email,
+                        user_name=f'{first_name} {last_name}',
+                        role='Admin'
+                    )
+                    self.stdout.write(self.style.SUCCESS(f'✓ Welcome email sent to {email}'))
+                except Exception as e:
+                    self.stdout.write(self.style.WARNING(f'⚠ Failed to send welcome email: {str(e)}'))
+
+                # Send internal alert
+                try:
+                    alert_message = f"""
+                    <p><strong>New Admin User Created</strong></p>
+                    <ul>
+                        <li><strong>Name:</strong> {first_name} {last_name}</li>
+                        <li><strong>Email:</strong> {email}</li>
+                        <li><strong>Phone:</strong> {phone}</li>
+                        <li><strong>Superuser:</strong> Yes</li>
+                    </ul>
+                    """
+                    send_internal_alert(
+                        subject=f'New Admin User Created - {first_name} {last_name}',
+                        message=alert_message,
+                        alert_type='info'
+                    )
+                except Exception as e:
+                    self.stdout.write(self.style.WARNING(f'⚠ Failed to send internal alert: {str(e)}'))
 
         except Exception as e:
             raise CommandError(f'Failed to create admin user: {str(e)}')

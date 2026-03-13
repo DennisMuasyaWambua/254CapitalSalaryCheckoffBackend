@@ -283,3 +283,47 @@ class HRProfile(models.Model):
 
     def __str__(self):
         return f'{self.user.get_full_name()} - {self.employer.name} (HR)'
+
+
+class PasswordResetToken(models.Model):
+    """
+    Password reset token for HR/Admin users.
+
+    Tokens expire after 1 hour and can only be used once.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='password_reset_tokens'
+    )
+    token = models.CharField(max_length=100, unique=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    is_used = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = 'password_reset_tokens'
+        ordering = ['-created_at']
+        verbose_name = 'Password Reset Token'
+        verbose_name_plural = 'Password Reset Tokens'
+        indexes = [
+            models.Index(fields=['token', 'is_used']),
+            models.Index(fields=['user', 'is_used']),
+        ]
+
+    def __str__(self):
+        return f'Password Reset Token for {self.user.email}'
+
+    @property
+    def is_expired(self):
+        """Check if token has expired."""
+        from django.utils import timezone
+        return timezone.now() > self.expires_at
+
+    @property
+    def is_valid(self):
+        """Check if token is valid (not used and not expired)."""
+        return not self.is_used and not self.is_expired

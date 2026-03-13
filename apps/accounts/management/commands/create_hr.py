@@ -16,6 +16,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from apps.accounts.models import CustomUser, HRProfile
 from apps.employers.models import Employer
+from common.email_service import send_welcome_email, send_internal_alert
 import getpass
 
 
@@ -207,6 +208,37 @@ class Command(BaseCommand):
                 self.stdout.write(self.style.SUCCESS(f'  Employer: {employer.name}'))
                 self.stdout.write(self.style.SUCCESS(f'\nYou can now log in at: /api/v1/auth/hr/login/'))
                 self.stdout.write(self.style.WARNING(f'Note: OTP will be sent to {phone} during login\n'))
+
+                # Send welcome email
+                try:
+                    send_welcome_email(
+                        to_address=email,
+                        user_name=f'{first_name} {last_name}',
+                        role='HR Manager'
+                    )
+                    self.stdout.write(self.style.SUCCESS(f'✓ Welcome email sent to {email}'))
+                except Exception as e:
+                    self.stdout.write(self.style.WARNING(f'⚠ Failed to send welcome email: {str(e)}'))
+
+                # Send internal alert
+                try:
+                    alert_message = f"""
+                    <p><strong>New HR Manager Created</strong></p>
+                    <ul>
+                        <li><strong>Name:</strong> {first_name} {last_name}</li>
+                        <li><strong>Email:</strong> {email}</li>
+                        <li><strong>Phone:</strong> {phone}</li>
+                        <li><strong>Employer:</strong> {employer.name}</li>
+                        <li><strong>Department:</strong> {hr_profile.department}</li>
+                    </ul>
+                    """
+                    send_internal_alert(
+                        subject=f'New HR Manager Created - {employer.name}',
+                        message=alert_message,
+                        alert_type='info'
+                    )
+                except Exception as e:
+                    self.stdout.write(self.style.WARNING(f'⚠ Failed to send internal alert: {str(e)}'))
 
         except Exception as e:
             raise CommandError(f'Failed to create HR manager user: {str(e)}')

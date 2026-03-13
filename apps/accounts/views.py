@@ -22,10 +22,13 @@ from .serializers import (
     VerifyLoginOTPSerializer, UserSerializer, UpdateProfileSerializer
 )
 from .otp import generate_otp, store_otp, verify_otp, can_request_new_otp
-from .models import CustomUser
+from .models import CustomUser, PasswordResetToken
 from common.throttling import OTPRateThrottle
 from common.utils import get_client_ip
+from common.email_service import send_welcome_email, send_internal_alert, send_password_reset_email
 from apps.audit.models import AuditLog
+import secrets
+from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +216,39 @@ class RegisterEmployeeView(APIView):
         )
 
         logger.info(f'New employee registered: {user.id}')
+
+        # Send welcome email if user has email address
+        if user.email:
+            try:
+                send_welcome_email(
+                    to_address=user.email,
+                    user_name=user.get_full_name() or user.phone_number,
+                    role='Employee'
+                )
+                logger.info(f'Welcome email sent to {user.email}')
+            except Exception as e:
+                logger.error(f'Failed to send welcome email to {user.email}: {str(e)}')
+
+        # Send internal alert to admin
+        try:
+            employer_name = user.employee_profile.employer.name
+            alert_message = f"""
+            <p><strong>New Employee Registration</strong></p>
+            <ul>
+                <li><strong>Name:</strong> {user.get_full_name()}</li>
+                <li><strong>Phone:</strong> {user.phone_number}</li>
+                <li><strong>Email:</strong> {user.email or 'Not provided'}</li>
+                <li><strong>Employer:</strong> {employer_name}</li>
+                <li><strong>Employee ID:</strong> {user.employee_profile.employee_id}</li>
+            </ul>
+            """
+            send_internal_alert(
+                subject=f'New Employee Registration - {employer_name}',
+                message=alert_message,
+                alert_type='info'
+            )
+        except Exception as e:
+            logger.error(f'Failed to send internal alert for employee registration: {str(e)}')
 
         return Response({
             'detail': 'Registration successful',
@@ -565,5 +601,173 @@ class ProfileView(APIView):
 
         return Response(
             UserSerializer(updated_user).data,
+            status=status.HTTP_200_OK
+        )
+
+
+class RequestPasswordResetView(APIView):
+    """
+    POST /api/v1/auth/password-reset/request/
+    Request password reset for HR/Admin users via email.
+
+    Sends a password reset link to the user's email address.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """Request password reset."""
+        email = request.data.get('email', '').strip()
+
+        if not email:
+            return Response(
+                {'detail': 'Email address is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Find user by email (HR or Admin only)
+        try:
+            user = CustomUser.objects.get(
+                email=email,
+                role__in=[CustomUser.Role.HR_MANAGER, CustomUser.Role.ADMIN]
+            )
+        except CustomUser.DoesNotExist:
+            # For security, don't reveal if email exists
+            return Response(
+                {'detail': 'If the email address is registered, you will receive a password reset link.'},
+                status=status.HTTP_200_OK
+            )
+
+        # Generate secure token
+        token = secrets.token_urlsafe(32)
+
+        # Create password reset token (expires in 1 hour)
+        reset_token = PasswordResetToken.objects.create(
+            user=user,
+            token=token,
+            expires_at=timezone.now() + timedelta(hours=1)
+        )
+
+        # Send password reset email
+        try:
+            frontend_url = settings.FRONTEND_URL
+            reset_url = f'{frontend_url}/reset-password'
+            send_password_reset_email(
+                to_address=user.email,
+                user_name=user.get_full_name() or user.email,
+                reset_token=token,
+                reset_url=reset_url
+            )
+            logger.info(f'Password reset email sent to {user.email}')
+        except Exception as e:
+            logger.error(f'Failed to send password reset email: {str(e)}')
+            return Response(
+                {'detail': 'Failed to send password reset email. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        # Log password reset request
+        AuditLog.log(
+            action='Password reset requested',
+            actor=user,
+            target_type='CustomUser',
+            target_id=user.id,
+            ip_address=get_client_ip(request)
+        )
+
+        return Response(
+            {'detail': 'If the email address is registered, you will receive a password reset link.'},
+            status=status.HTTP_200_OK
+        )
+
+
+class ResetPasswordView(APIView):
+    """
+    POST /api/v1/auth/password-reset/confirm/
+    Reset password using the token from email.
+
+    Validates the token and sets a new password.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """Reset password with token."""
+        token = request.data.get('token', '').strip()
+        new_password = request.data.get('new_password', '').strip()
+
+        if not token or not new_password:
+            return Response(
+                {'detail': 'Token and new password are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate password length
+        if len(new_password) < 8:
+            return Response(
+                {'detail': 'Password must be at least 8 characters long.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Find valid token
+        try:
+            reset_token = PasswordResetToken.objects.select_related('user').get(
+                token=token,
+                is_used=False
+            )
+        except PasswordResetToken.DoesNotExist:
+            return Response(
+                {'detail': 'Invalid or expired reset token.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if token expired
+        if reset_token.is_expired:
+            return Response(
+                {'detail': 'Reset token has expired. Please request a new one.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update password
+        user = reset_token.user
+        user.set_password(new_password)
+        user.save()
+
+        # Mark token as used
+        reset_token.is_used = True
+        reset_token.used_at = timezone.now()
+        reset_token.save()
+
+        # Log password reset
+        AuditLog.log(
+            action='Password reset completed',
+            actor=user,
+            target_type='CustomUser',
+            target_id=user.id,
+            ip_address=get_client_ip(request)
+        )
+
+        # Send internal alert
+        try:
+            alert_message = f"""
+            <p><strong>Password Reset Completed</strong></p>
+            <ul>
+                <li><strong>User:</strong> {user.get_full_name()}</li>
+                <li><strong>Email:</strong> {user.email}</li>
+                <li><strong>Role:</strong> {user.get_role_display()}</li>
+            </ul>
+            """
+            send_internal_alert(
+                subject=f'Password Reset - {user.get_full_name()}',
+                message=alert_message,
+                alert_type='info'
+            )
+        except Exception as e:
+            logger.error(f'Failed to send internal alert: {str(e)}')
+
+        logger.info(f'Password reset completed for {user.email}')
+
+        return Response(
+            {'detail': 'Password reset successful. You can now log in with your new password.'},
             status=status.HTTP_200_OK
         )

@@ -60,6 +60,10 @@ pytek-wasiliana==1.2
 python-dateutil==2.9.0
 python-json-logger==2.0.7
 
+# Microsoft Graph API Email
+msal==1.28.0
+requests==2.32.3
+
 # Development
 ipython==8.27.0
 

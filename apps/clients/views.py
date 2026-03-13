@@ -11,6 +11,7 @@ from django.shortcuts import get_object_or_404
 import pandas as pd
 from io import BytesIO
 from openpyxl import Workbook
+import logging
 
 from .models import ExistingClient
 from .serializers import (
@@ -19,6 +20,9 @@ from .serializers import (
     ExistingClientApprovalSerializer,
     BulkApprovalSerializer,
 )
+from common.email_service import send_email, send_internal_alert
+
+logger = logging.getLogger(__name__)
 
 
 class ExistingClientViewSet(viewsets.ModelViewSet):
@@ -66,6 +70,27 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
 
         # Set entered_by to current user's name
         client = serializer.save(entered_by=request.user.get_full_name())
+
+        # Send internal alert
+        try:
+            alert_message = f"""
+            <p><strong>New Existing Client Record Created (Manual Entry)</strong></p>
+            <ul>
+                <li><strong>Client:</strong> {client.full_name}</li>
+                <li><strong>National ID:</strong> {client.national_id}</li>
+                <li><strong>Mobile:</strong> {client.mobile}</li>
+                <li><strong>Employer:</strong> {client.employer.name}</li>
+                <li><strong>Loan Amount:</strong> KES {client.loan_amount:,.2f}</li>
+                <li><strong>Entered by:</strong> {request.user.get_full_name()}</li>
+            </ul>
+            """
+            send_internal_alert(
+                subject=f'New Client Record - {client.full_name}',
+                message=alert_message,
+                alert_type='info'
+            )
+        except Exception as e:
+            logger.error(f'Failed to send internal alert: {str(e)}')
 
         return Response({
             'detail': 'Client record created successfully',
@@ -130,6 +155,27 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
                         'row': index + 2,  # +2 because index starts at 0 and we have header row
                         'error': str(e)
                     })
+
+            # Send internal alert for bulk upload
+            if valid_clients:
+                try:
+                    alert_message = f"""
+                    <p><strong>Bulk Client Upload Completed</strong></p>
+                    <ul>
+                        <li><strong>Total Rows:</strong> {len(df)}</li>
+                        <li><strong>Successful:</strong> {len(valid_clients)}</li>
+                        <li><strong>Failed:</strong> {len(errors)}</li>
+                        <li><strong>Uploaded by:</strong> {request.user.get_full_name()}</li>
+                        <li><strong>File:</strong> {file.name}</li>
+                    </ul>
+                    """
+                    send_internal_alert(
+                        subject=f'Bulk Client Upload - {len(valid_clients)} records added',
+                        message=alert_message,
+                        alert_type='info'
+                    )
+                except Exception as e:
+                    logger.error(f'Failed to send internal alert: {str(e)}')
 
             return Response({
                 'message': 'Bulk upload processed',
@@ -327,6 +373,83 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
         # TODO: Create employee account if needed
         # TODO: Send SMS notification
 
+        # Send email notification if client has email
+        if client.email:
+            try:
+                subject = 'Welcome to 254 Capital - Loan Record Approved'
+                body_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                        .header {{ background-color: #27ae60; color: white; padding: 20px; text-align: center; }}
+                        .content {{ padding: 20px; background-color: #f9f9f9; }}
+                        .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+                        .info-box {{ background-color: #e8f8f5; border-left: 4px solid #27ae60; padding: 15px; margin: 15px 0; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="header">
+                            <h1>Loan Record Approved</h1>
+                        </div>
+                        <div class="content">
+                            <h2>Hello {client.full_name},</h2>
+                            <p>Your existing loan record with 254 Capital has been approved and is now active in our system.</p>
+
+                            <div class="info-box">
+                                <p><strong>Loan Details:</strong></p>
+                                <ul>
+                                    <li><strong>Loan Amount:</strong> KES {client.loan_amount:,.2f}</li>
+                                    <li><strong>Repayment Period:</strong> {client.repayment_period} months</li>
+                                    <li><strong>Monthly Deduction:</strong> KES {client.monthly_deduction:,.2f}</li>
+                                    <li><strong>Outstanding Balance:</strong> KES {client.outstanding_balance:,.2f}</li>
+                                    <li><strong>Employer:</strong> {client.employer.name}</li>
+                                </ul>
+                            </div>
+
+                            <p>If you have any questions, please contact us.</p>
+
+                            <p>Best regards,<br>
+                            <strong>254 Capital Team</strong></p>
+                        </div>
+                        <div class="footer">
+                            <p>&copy; 2026 254 Capital. All rights reserved.</p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+                send_email(client.email, subject, body_html, cc_address='david.muema@254-capital.com')
+                logger.info(f'Approval email sent to client {client.id}')
+            except Exception as e:
+                logger.error(f'Failed to send approval email: {str(e)}')
+
+        # Send internal alert
+        try:
+            alert_message = f"""
+            <p><strong>Existing Client Record Approved</strong></p>
+            <ul>
+                <li><strong>Client:</strong> {client.full_name}</li>
+                <li><strong>National ID:</strong> {client.national_id}</li>
+                <li><strong>Mobile:</strong> {client.mobile}</li>
+                <li><strong>Employer:</strong> {client.employer.name}</li>
+                <li><strong>Loan Amount:</strong> KES {client.loan_amount:,.2f}</li>
+                <li><strong>Outstanding Balance:</strong> KES {client.outstanding_balance:,.2f}</li>
+                <li><strong>Approved by:</strong> {request.user.get_full_name()}</li>
+            </ul>
+            """
+            send_internal_alert(
+                subject=f'Client Approved - {client.full_name}',
+                message=alert_message,
+                alert_type='success'
+            )
+        except Exception as e:
+            logger.error(f'Failed to send internal alert: {str(e)}')
+
         return Response({
             'detail': 'Client approved successfully',
             'client': ExistingClientSerializer(client).data
@@ -353,6 +476,75 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
         client.approval_status = 'rejected'
         client.rejection_reason = serializer.validated_data.get('rejection_reason', '')
         client.save()
+
+        # Send email notification if client has email
+        if client.email:
+            try:
+                subject = '254 Capital - Loan Record Review Update'
+                body_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                        .header {{ background-color: #e74c3c; color: white; padding: 20px; text-align: center; }}
+                        .content {{ padding: 20px; background-color: #f9f9f9; }}
+                        .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+                        .warning {{ background-color: #ffebee; border-left: 4px solid #e74c3c; padding: 15px; margin: 15px 0; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="header">
+                            <h1>Loan Record Review Update</h1>
+                        </div>
+                        <div class="content">
+                            <h2>Hello {client.full_name},</h2>
+                            <p>We regret to inform you that your loan record submission requires further review.</p>
+
+                            <div class="warning">
+                                <p><strong>Reason for Review:</strong></p>
+                                <p>{client.rejection_reason or 'Please contact us for more information.'}</p>
+                            </div>
+
+                            <p>Please contact our support team for more information or to resubmit your application.</p>
+
+                            <p>Best regards,<br>
+                            <strong>254 Capital Team</strong></p>
+                        </div>
+                        <div class="footer">
+                            <p>&copy; 2026 254 Capital. All rights reserved.</p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+                send_email(client.email, subject, body_html, cc_address='david.muema@254-capital.com')
+                logger.info(f'Rejection email sent to client {client.id}')
+            except Exception as e:
+                logger.error(f'Failed to send rejection email: {str(e)}')
+
+        # Send internal alert
+        try:
+            alert_message = f"""
+            <p><strong>Existing Client Record Rejected</strong></p>
+            <ul>
+                <li><strong>Client:</strong> {client.full_name}</li>
+                <li><strong>National ID:</strong> {client.national_id}</li>
+                <li><strong>Employer:</strong> {client.employer.name}</li>
+                <li><strong>Rejection Reason:</strong> {client.rejection_reason or 'Not specified'}</li>
+                <li><strong>Rejected by:</strong> {request.user.get_full_name()}</li>
+            </ul>
+            """
+            send_internal_alert(
+                subject=f'Client Rejected - {client.full_name}',
+                message=alert_message,
+                alert_type='warning'
+            )
+        except Exception as e:
+            logger.error(f'Failed to send internal alert: {str(e)}')
 
         return Response({
             'detail': 'Client rejected successfully',
@@ -382,6 +574,24 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
 
         # TODO: Create employee accounts for approved clients
         # TODO: Send SMS notifications
+
+        # Send internal alert
+        if updated_count > 0:
+            try:
+                alert_message = f"""
+                <p><strong>Bulk Client Approval Completed</strong></p>
+                <ul>
+                    <li><strong>Clients Approved:</strong> {updated_count}</li>
+                    <li><strong>Approved by:</strong> {request.user.get_full_name()}</li>
+                </ul>
+                """
+                send_internal_alert(
+                    subject=f'Bulk Approval - {updated_count} clients approved',
+                    message=alert_message,
+                    alert_type='success'
+                )
+            except Exception as e:
+                logger.error(f'Failed to send internal alert: {str(e)}')
 
         return Response({
             'detail': f'{updated_count} client(s) approved successfully',
