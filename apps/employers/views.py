@@ -17,6 +17,7 @@ from apps.accounts.permissions import IsAdmin, IsHROrAdmin
 from common.pagination import StandardPagination
 from common.utils import get_client_ip
 from apps.audit.models import AuditLog
+from common.email_service import send_email, send_internal_alert
 import logging
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,101 @@ class EmployerCreateView(APIView):
         )
 
         logger.info(f'Employer onboarded: {employer.name} by {request.user.id}')
+
+        # Send welcome email to HR contact
+        if employer.hr_contact_email:
+            try:
+                subject = 'Welcome to 254 Capital - Employer Onboarding Successful'
+                body_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                        .header {{ background-color: #27ae60; color: white; padding: 20px; text-align: center; }}
+                        .content {{ padding: 20px; background-color: #f9f9f9; }}
+                        .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+                        .info-box {{ background-color: #e8f5e9; border-left: 4px solid #27ae60; padding: 15px; margin: 15px 0; }}
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="header">
+                            <h1>Welcome to 254 Capital</h1>
+                        </div>
+                        <div class="content">
+                            <h2>Hello {employer.hr_contact_name},</h2>
+                            <p>We are pleased to inform you that <strong>{employer.name}</strong> has been successfully onboarded to the 254 Capital Salary Check-Off Loan Management System.</p>
+
+                            <div class="info-box">
+                                <p><strong>Employer Details:</strong></p>
+                                <ul>
+                                    <li><strong>Company Name:</strong> {employer.name}</li>
+                                    <li><strong>Registration Number:</strong> {employer.registration_number}</li>
+                                    <li><strong>Payroll Cycle Day:</strong> Day {employer.payroll_cycle_day} of each month</li>
+                                    <li><strong>HR Contact:</strong> {employer.hr_contact_name}</li>
+                                    <li><strong>Contact Phone:</strong> {employer.hr_contact_phone}</li>
+                                </ul>
+                            </div>
+
+                            <p>As an onboarded employer, your employees can now:</p>
+                            <ul>
+                                <li>Register on the platform using your organization's details</li>
+                                <li>Apply for salary check-off loans</li>
+                                <li>Track their loan applications and repayment schedules</li>
+                            </ul>
+
+                            <p>Your HR team will be able to:</p>
+                            <ul>
+                                <li>Review and approve employee loan applications</li>
+                                <li>Submit monthly salary deduction remittances</li>
+                                <li>Manage employee records and loan statuses</li>
+                            </ul>
+
+                            <p>For HR manager access, please contact our admin team at david.muema@254-capital.com</p>
+
+                            <p>If you have any questions or need assistance, please don't hesitate to reach out.</p>
+
+                            <p>Best regards,<br>
+                            <strong>254 Capital Team</strong></p>
+                        </div>
+                        <div class="footer">
+                            <p>&copy; 2026 254 Capital. All rights reserved.</p>
+                            <p>This is an automated message. Please do not reply to this email.</p>
+                        </div>
+                    </div>
+                </body>
+                </html>
+                """
+                send_email(employer.hr_contact_email, subject, body_html, cc_address='david.muema@254-capital.com')
+                logger.info(f'Employer onboarding email sent to {employer.hr_contact_email}')
+            except Exception as e:
+                logger.error(f'Failed to send employer onboarding email: {str(e)}')
+
+        # Send internal alert to admin
+        try:
+            alert_message = f"""
+            <p><strong>New Employer Onboarded</strong></p>
+            <ul>
+                <li><strong>Company Name:</strong> {employer.name}</li>
+                <li><strong>Registration Number:</strong> {employer.registration_number}</li>
+                <li><strong>Address:</strong> {employer.address}</li>
+                <li><strong>Payroll Cycle Day:</strong> Day {employer.payroll_cycle_day}</li>
+                <li><strong>HR Contact Name:</strong> {employer.hr_contact_name}</li>
+                <li><strong>HR Contact Email:</strong> {employer.hr_contact_email}</li>
+                <li><strong>HR Contact Phone:</strong> {employer.hr_contact_phone}</li>
+                <li><strong>Onboarded By:</strong> {request.user.get_full_name() or request.user.email}</li>
+            </ul>
+            """
+            send_internal_alert(
+                subject=f'New Employer Onboarded - {employer.name}',
+                message=alert_message,
+                alert_type='success'
+            )
+        except Exception as e:
+            logger.error(f'Failed to send internal alert for employer onboarding: {str(e)}')
 
         return Response(
             EmployerDetailSerializer(employer).data,
