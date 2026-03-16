@@ -8,11 +8,22 @@ from common.utils import validate_kenyan_phone, normalize_kenyan_phone
 
 
 class EmployerListSerializer(serializers.ModelSerializer):
-    """Serializer for listing employers (minimal fields for dropdown)."""
+    """Serializer for listing employers."""
+
+    total_employees = serializers.IntegerField(read_only=True)
+    active_loans_count = serializers.IntegerField(read_only=True)
+    pending_applications_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Employer
-        fields = ['id', 'name', 'is_active']
+        fields = [
+            'id', 'name', 'registration_number', 'address',
+            'payroll_cycle_day', 'hr_contact_name', 'hr_contact_email',
+            'hr_contact_phone', 'is_active', 'onboarded_by',
+            'onboarded_at', 'updated_at', 'total_employees',
+            'active_loans_count', 'pending_applications_count'
+        ]
+        read_only_fields = ['id', 'onboarded_by', 'onboarded_at', 'updated_at']
 
 
 class EmployerDetailSerializer(serializers.ModelSerializer):

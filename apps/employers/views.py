@@ -7,12 +7,17 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q
+from django.db import transaction
+from datetime import datetime
+import secrets
+import string
 
 from .models import Employer
 from .serializers import (
     EmployerListSerializer, EmployerDetailSerializer,
     EmployerCreateSerializer, EmployerUpdateSerializer
 )
+from apps.accounts.models import CustomUser, HRProfile
 from apps.accounts.permissions import IsAdmin, IsHROrAdmin
 from common.pagination import StandardPagination
 from common.utils import get_client_ip
@@ -21,6 +26,23 @@ from common.email_service import send_email, send_internal_alert
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def generate_hr_password():
+    """Generate a secure temporary password for HR managers."""
+    year = datetime.now().year
+    random_chars = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(4))
+    return f'HR-{random_chars}-{year}!'
+
+
+def generate_hr_username(employer_name):
+    """Generate a username for HR manager based on employer name."""
+    # Remove special characters and spaces, take first 10 chars, convert to lowercase
+    clean_name = ''.join(char for char in employer_name if char.isalnum() or char.isspace())
+    clean_name = clean_name.replace(' ', '_').lower()[:10]
+    # Add random suffix to ensure uniqueness
+    random_suffix = ''.join(secrets.choice(string.digits) for _ in range(4))
+    return f'hr_{clean_name}_{random_suffix}'
 
 
 class EmployerListView(APIView):
@@ -39,8 +61,24 @@ class EmployerListView(APIView):
 
     def get(self, request):
         """List employers."""
-        # Get all active employers
-        employers = Employer.objects.filter(is_active=True)
+        from django.db.models import Count
+        from apps.accounts.models import EmployeeProfile
+        from apps.loans.models import LoanApplication
+
+        # Get all active employers with annotations
+        employers = Employer.objects.filter(is_active=True).annotate(
+            total_employees=Count('employeeprofile', distinct=True),
+            active_loans_count=Count(
+                'employeeprofile__user__employee_applications',
+                filter=Q(employeeprofile__user__employee_applications__status='active'),
+                distinct=True
+            ),
+            pending_applications_count=Count(
+                'employeeprofile__user__employee_applications',
+                filter=Q(employeeprofile__user__employee_applications__status='pending_hr_review'),
+                distinct=True
+            )
+        )
 
         # Apply search filter
         search = request.query_params.get('search', '').strip()
@@ -70,26 +108,55 @@ class EmployerCreateView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request):
-        """Create new employer."""
+        """Create new employer and HR manager account."""
         serializer = EmployerCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Create employer
-        employer = serializer.save(onboarded_by=request.user)
+        # Use transaction to ensure all operations succeed or fail together
+        with transaction.atomic():
+            # Create employer
+            employer = serializer.save(onboarded_by=request.user)
 
-        # Log onboarding
-        AuditLog.log(
-            action=f'Employer onboarded: {employer.name}',
-            actor=request.user,
-            target_type='Employer',
-            target_id=employer.id,
-            metadata={'employer_name': employer.name},
-            ip_address=get_client_ip(request)
-        )
+            # Generate HR manager credentials
+            hr_username = generate_hr_username(employer.name)
+            hr_password = generate_hr_password()
 
-        logger.info(f'Employer onboarded: {employer.name} by {request.user.id}')
+            # Create HR manager user account
+            hr_user = CustomUser.objects.create_user(
+                username=hr_username,
+                email=employer.hr_contact_email,
+                password=hr_password,
+                first_name=employer.hr_contact_name.split()[0] if employer.hr_contact_name else '',
+                last_name=' '.join(employer.hr_contact_name.split()[1:]) if len(employer.hr_contact_name.split()) > 1 else '',
+                phone_number=employer.hr_contact_phone,
+                role=CustomUser.Role.HR_MANAGER,
+                is_active=True
+            )
 
-        # Send welcome email to HR contact
+            # Create HR profile linking user to employer
+            HRProfile.objects.create(
+                user=hr_user,
+                employer=employer
+            )
+
+            # Log onboarding
+            AuditLog.log(
+                action=f'Employer onboarded: {employer.name}',
+                actor=request.user,
+                target_type='Employer',
+                target_id=employer.id,
+                metadata={
+                    'employer_name': employer.name,
+                    'hr_username': hr_username,
+                    'hr_user_id': str(hr_user.id)
+                },
+                ip_address=get_client_ip(request)
+            )
+
+            logger.info(f'Employer onboarded: {employer.name} by {request.user.id}')
+            logger.info(f'HR manager account created: {hr_username} for {employer.name}')
+
+        # Send welcome email to HR contact with credentials
         if employer.hr_contact_email:
             try:
                 subject = 'Welcome to 254 Capital - Employer Onboarding Successful'
@@ -141,7 +208,18 @@ class EmployerCreateView(APIView):
                                 <li>Manage employee records and loan statuses</li>
                             </ul>
 
-                            <p>For HR manager access, please contact our admin team at david.muema@254-capital.com</p>
+                            <div class="info-box" style="background-color: #fff3cd; border-left: 4px solid #ffc107;">
+                                <p><strong>HR Manager Login Credentials</strong></p>
+                                <p>An HR manager account has been created for you. Please use the following credentials to log in:</p>
+                                <ul>
+                                    <li><strong>Username:</strong> {hr_username}</li>
+                                    <li><strong>Temporary Password:</strong> {hr_password}</li>
+                                    <li><strong>Login URL:</strong> https://254-capital.com/salary-checkoff/login</li>
+                                </ul>
+                                <p style="color: #856404; margin-top: 10px;">
+                                    <strong>Important:</strong> Please change your password after your first login for security purposes.
+                                </p>
+                            </div>
 
                             <p>If you have any questions or need assistance, please don't hesitate to reach out.</p>
 
@@ -173,6 +251,8 @@ class EmployerCreateView(APIView):
                 <li><strong>HR Contact Name:</strong> {employer.hr_contact_name}</li>
                 <li><strong>HR Contact Email:</strong> {employer.hr_contact_email}</li>
                 <li><strong>HR Contact Phone:</strong> {employer.hr_contact_phone}</li>
+                <li><strong>HR Username:</strong> {hr_username}</li>
+                <li><strong>Temporary Password:</strong> {hr_password}</li>
                 <li><strong>Onboarded By:</strong> {request.user.get_full_name() or request.user.email}</li>
             </ul>
             """
@@ -184,8 +264,16 @@ class EmployerCreateView(APIView):
         except Exception as e:
             logger.error(f'Failed to send internal alert for employer onboarding: {str(e)}')
 
+        # Return employer data with HR credentials
+        response_data = EmployerDetailSerializer(employer).data
+        response_data['hr_credentials'] = {
+            'username': hr_username,
+            'temporary_password': hr_password,
+            'login_url': 'https://254-capital.com/salary-checkoff/login'
+        }
+
         return Response(
-            EmployerDetailSerializer(employer).data,
+            response_data,
             status=status.HTTP_201_CREATED
         )
 
