@@ -13,5 +13,8 @@ router = DefaultRouter()
 router.register(r'', views.ExistingClientViewSet, basename='existing-clients')
 
 urlpatterns = [
+    # Standalone template download (no auth required)
+    path('template-download/', views.download_client_template, name='template-download'),
+    # Viewset routes
     path('', include(router.urls)),
 ]

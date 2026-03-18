@@ -3,14 +3,16 @@ Views for client management endpoints.
 """
 
 from rest_framework import viewsets, status, generics
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
+from django.http import HttpResponse
 import pandas as pd
 from io import BytesIO
 from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
 import logging
 
 from .models import ExistingClient
@@ -42,6 +44,15 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
     filterset_fields = ['approval_status', 'loan_status', 'employer']
     search_fields = ['full_name', 'national_id', 'mobile', 'employee_id']
     ordering_fields = ['created_at', 'full_name', 'outstanding_balance']
+
+    def get_permissions(self):
+        """
+        Override permissions for specific actions.
+        Allow unauthenticated access to template download.
+        """
+        if self.action == 'upload_template':
+            return [AllowAny()]
+        return super().get_permissions()
 
     def get_queryset(self):
         """Filter queryset based on user role."""
@@ -97,10 +108,49 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
             'client': ExistingClientSerializer(client).data
         }, status=status.HTTP_201_CREATED)
 
+    def _get_employer_id(self, employer_value):
+        """
+        Helper method to get employer ID from either name or UUID.
+
+        Args:
+            employer_value: Either employer name (str) or employer UUID (str)
+
+        Returns:
+            str: Employer UUID
+
+        Raises:
+            ValueError: If employer not found
+        """
+        from apps.employers.models import Employer
+        from uuid import UUID
+
+        if not employer_value or pd.isna(employer_value):
+            raise ValueError("Employer is required")
+
+        employer_value = str(employer_value).strip()
+
+        # Try to parse as UUID first
+        try:
+            UUID(employer_value)
+            # It's a valid UUID, verify it exists
+            employer = Employer.objects.filter(id=employer_value, is_active=True).first()
+            if employer:
+                return employer_value
+            else:
+                raise ValueError(f"Employer with ID '{employer_value}' not found or inactive")
+        except (ValueError, AttributeError):
+            # Not a UUID, treat as employer name
+            employer = Employer.objects.filter(name__iexact=employer_value, is_active=True).first()
+            if employer:
+                return str(employer.id)
+            else:
+                raise ValueError(f"Employer '{employer_value}' not found. Please check the 'Employer Reference' sheet.")
+
     @action(detail=False, methods=['post'])
     def bulk_upload(self, request):
         """
         Bulk upload client records from Excel/CSV file.
+        Accepts employer names or IDs.
 
         POST /api/v1/clients/bulk-upload/
         """
@@ -126,23 +176,97 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
 
             for index, row in df.iterrows():
                 try:
-                    # Map DataFrame columns to model fields
+                    # Get employer value (can be name or ID)
+                    employer_value = (
+                        row.get('Employer Name *') or
+                        row.get('Employer Name') or
+                        row.get('Employer ID') or
+                        row.get('employer_name') or
+                        row.get('employer_id')
+                    )
+
+                    # Resolve employer ID
+                    employer_id = self._get_employer_id(employer_value)
+
+                    # Map DataFrame columns to model fields (matching new template headers)
                     client_data = {
-                        'full_name': row.get('Full Name') or row.get('full_name'),
-                        'national_id': str(row.get('National ID') or row.get('national_id')),
-                        'mobile': str(row.get('Mobile') or row.get('mobile')),
-                        'email': row.get('Email') or row.get('email', ''),
-                        'employer_id': row.get('Employer ID') or row.get('employer_id'),
-                        'employee_id': row.get('Employee ID') or row.get('employee_id', ''),
-                        'loan_amount': float(row.get('Loan Amount') or row.get('loan_amount')),
-                        'interest_rate': float(row.get('Interest Rate') or row.get('interest_rate')),
-                        'start_date': pd.to_datetime(row.get('Start Date') or row.get('start_date')).date(),
-                        'repayment_period': int(row.get('Repayment Period') or row.get('repayment_period')),
-                        'disbursement_date': pd.to_datetime(row.get('Disbursement Date') or row.get('disbursement_date')).date(),
-                        'disbursement_method': (row.get('Disbursement Method') or row.get('disbursement_method', 'mpesa')).lower(),
-                        'amount_paid': float(row.get('Amount Paid') or row.get('amount_paid', 0)),
-                        'loan_status': row.get('Loan Status') or row.get('loan_status', 'Active'),
+                        'full_name': (
+                            row.get('Full Name *') or
+                            row.get('Full Name') or
+                            row.get('full_name')
+                        ),
+                        'national_id': str(
+                            row.get('National ID Number *') or
+                            row.get('National ID Number') or
+                            row.get('National ID') or
+                            row.get('national_id')
+                        ),
+                        'mobile': str(
+                            row.get('Mobile Number *') or
+                            row.get('Mobile Number') or
+                            row.get('Mobile') or
+                            row.get('mobile')
+                        ),
+                        'email': (
+                            row.get('Email Address') or
+                            row.get('Email') or
+                            row.get('email', '')
+                        ),
+                        'employer_id': employer_id,
+                        'employee_id': (
+                            row.get('Employee ID') or
+                            row.get('employee_id', '')
+                        ),
+                        'loan_amount': float(
+                            row.get('Loan Amount (KES) *') or
+                            row.get('Loan Amount (KES)') or
+                            row.get('Loan Amount') or
+                            row.get('loan_amount')
+                        ),
+                        'interest_rate': float(
+                            row.get('Interest Rate (%) *') or
+                            row.get('Interest Rate (%)') or
+                            row.get('Interest Rate') or
+                            row.get('interest_rate')
+                        ),
+                        'start_date': pd.to_datetime(
+                            row.get('Loan Start Date *') or
+                            row.get('Loan Start Date') or
+                            row.get('Start Date') or
+                            row.get('start_date')
+                        ).date(),
+                        'repayment_period': int(
+                            row.get('Repayment Period (Months) *') or
+                            row.get('Repayment Period (Months)') or
+                            row.get('Repayment Period') or
+                            row.get('repayment_period')
+                        ),
+                        'disbursement_date': pd.to_datetime(
+                            row.get('Disbursement Date *') or
+                            row.get('Disbursement Date') or
+                            row.get('disbursement_date')
+                        ).date(),
+                        'disbursement_method': str(
+                            row.get('Disbursement Method *') or
+                            row.get('Disbursement Method') or
+                            row.get('disbursement_method', 'mpesa')
+                        ).lower().strip(),
+                        'amount_paid': float(
+                            row.get('Amount Paid to Date (KES)') or
+                            row.get('Amount Paid') or
+                            row.get('amount_paid', 0)
+                        ),
+                        'loan_status': (
+                            row.get('Loan Status') or
+                            row.get('loan_status', 'Active')
+                        ),
                     }
+
+                    # Skip rows that appear to be instructions or empty
+                    if not client_data['full_name'] or pd.isna(client_data['full_name']):
+                        continue
+                    if str(client_data['full_name']).startswith('INSTRUCTIONS') or str(client_data['full_name']).startswith('1.'):
+                        continue
 
                     # Validate and create client
                     serializer = ExistingClientSerializer(data=client_data)
@@ -195,6 +319,7 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
     def validate_upload(self, request):
         """
         Validate bulk upload file without importing.
+        Provides preview with validation status for each row.
 
         POST /api/v1/clients/validate/
         """
@@ -215,50 +340,152 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
                 }, status=status.HTTP_400_BAD_REQUEST)
 
             # Validate rows
-            validation_results = []
+            preview_data = []
 
             for index, row in df.iterrows():
-                result = {
-                    'row': index + 2,
-                    'status': 'valid',
-                    'errors': []
-                }
-
                 try:
+                    # Get employer value (can be name or ID)
+                    employer_value = (
+                        row.get('Employer Name *') or
+                        row.get('Employer Name') or
+                        row.get('Employer ID') or
+                        row.get('employer_name') or
+                        row.get('employer_id')
+                    )
+
+                    # Get full name
+                    full_name = (
+                        row.get('Full Name *') or
+                        row.get('Full Name') or
+                        row.get('full_name')
+                    )
+
+                    # Skip instruction rows or empty rows
+                    if not full_name or pd.isna(full_name):
+                        continue
+                    if str(full_name).startswith('INSTRUCTIONS') or str(full_name).startswith('1.'):
+                        continue
+
+                    # Resolve employer ID
+                    employer_id = self._get_employer_id(employer_value)
+
                     client_data = {
-                        'full_name': row.get('Full Name') or row.get('full_name'),
-                        'national_id': str(row.get('National ID') or row.get('national_id')),
-                        'mobile': str(row.get('Mobile') or row.get('mobile')),
-                        'email': row.get('Email') or row.get('email', ''),
-                        'employer_id': row.get('Employer ID') or row.get('employer_id'),
-                        'employee_id': row.get('Employee ID') or row.get('employee_id', ''),
-                        'loan_amount': float(row.get('Loan Amount') or row.get('loan_amount')),
-                        'interest_rate': float(row.get('Interest Rate') or row.get('interest_rate')),
-                        'start_date': pd.to_datetime(row.get('Start Date') or row.get('start_date')).date(),
-                        'repayment_period': int(row.get('Repayment Period') or row.get('repayment_period')),
-                        'disbursement_date': pd.to_datetime(row.get('Disbursement Date') or row.get('disbursement_date')).date(),
-                        'disbursement_method': (row.get('Disbursement Method') or row.get('disbursement_method', 'mpesa')).lower(),
+                        'full_name': full_name,
+                        'national_id': str(
+                            row.get('National ID Number *') or
+                            row.get('National ID Number') or
+                            row.get('National ID') or
+                            row.get('national_id')
+                        ),
+                        'mobile': str(
+                            row.get('Mobile Number *') or
+                            row.get('Mobile Number') or
+                            row.get('Mobile') or
+                            row.get('mobile')
+                        ),
+                        'email': (
+                            row.get('Email Address') or
+                            row.get('Email') or
+                            row.get('email', '')
+                        ),
+                        'employer_id': employer_id,
+                        'employee_id': (
+                            row.get('Employee ID') or
+                            row.get('employee_id', '')
+                        ),
+                        'loan_amount': float(
+                            row.get('Loan Amount (KES) *') or
+                            row.get('Loan Amount (KES)') or
+                            row.get('Loan Amount') or
+                            row.get('loan_amount')
+                        ),
+                        'interest_rate': float(
+                            row.get('Interest Rate (%) *') or
+                            row.get('Interest Rate (%)') or
+                            row.get('Interest Rate') or
+                            row.get('interest_rate')
+                        ),
+                        'start_date': pd.to_datetime(
+                            row.get('Loan Start Date *') or
+                            row.get('Loan Start Date') or
+                            row.get('Start Date') or
+                            row.get('start_date')
+                        ).date(),
+                        'repayment_period': int(
+                            row.get('Repayment Period (Months) *') or
+                            row.get('Repayment Period (Months)') or
+                            row.get('Repayment Period') or
+                            row.get('repayment_period')
+                        ),
+                        'disbursement_date': pd.to_datetime(
+                            row.get('Disbursement Date *') or
+                            row.get('Disbursement Date') or
+                            row.get('disbursement_date')
+                        ).date(),
+                        'disbursement_method': str(
+                            row.get('Disbursement Method *') or
+                            row.get('Disbursement Method') or
+                            row.get('disbursement_method', 'mpesa')
+                        ).lower().strip(),
+                        'amount_paid': float(
+                            row.get('Amount Paid to Date (KES)') or
+                            row.get('Amount Paid') or
+                            row.get('amount_paid', 0)
+                        ),
+                        'loan_status': (
+                            row.get('Loan Status') or
+                            row.get('loan_status', 'Active')
+                        ),
                     }
 
+                    # Validate with serializer
                     serializer = ExistingClientSerializer(data=client_data)
-                    if not serializer.is_valid():
-                        result['status'] = 'invalid'
-                        result['errors'] = serializer.errors
+                    if serializer.is_valid():
+                        preview_data.append({
+                            'row_number': index + 2,
+                            'name': client_data['full_name'],
+                            'national_id': client_data['national_id'],
+                            'mobile': client_data['mobile'],
+                            'employer': str(employer_value),
+                            'loan_amount': client_data['loan_amount'],
+                            'status': 'valid',
+                            'issue': None
+                        })
+                    else:
+                        error_messages = []
+                        for field, errors in serializer.errors.items():
+                            error_messages.append(f"{field}: {', '.join(errors)}")
+                        preview_data.append({
+                            'row_number': index + 2,
+                            'name': str(full_name),
+                            'national_id': str(client_data.get('national_id', '')),
+                            'mobile': str(client_data.get('mobile', '')),
+                            'employer': str(employer_value),
+                            'loan_amount': client_data.get('loan_amount', 0),
+                            'status': 'error',
+                            'issue': '; '.join(error_messages)
+                        })
 
                 except Exception as e:
-                    result['status'] = 'invalid'
-                    result['errors'] = [str(e)]
+                    preview_data.append({
+                        'row_number': index + 2,
+                        'name': str(full_name) if 'full_name' in locals() and full_name else 'Unknown',
+                        'national_id': '',
+                        'mobile': '',
+                        'employer': str(employer_value) if 'employer_value' in locals() else '',
+                        'loan_amount': 0,
+                        'status': 'error',
+                        'issue': str(e)
+                    })
 
-                validation_results.append(result)
-
-            valid_count = sum(1 for r in validation_results if r['status'] == 'valid')
-            invalid_count = len(validation_results) - valid_count
+            valid_count = sum(1 for r in preview_data if r['status'] == 'valid')
+            invalid_count = len(preview_data) - valid_count
 
             return Response({
                 'total_rows': len(df),
                 'valid_rows': valid_count,
                 'invalid_rows': invalid_count,
-                'validation_results': validation_results[:100]  # Limit to first 100
+                'preview': preview_data[:100]  # Limit to first 100
             })
 
         except Exception as e:
@@ -266,60 +493,142 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
                 'error': f'Failed to validate file: {str(e)}'
             }, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=['get'], permission_classes=[AllowAny], authentication_classes=[])
     def upload_template(self, request):
         """
-        Generate and return Excel template file.
+        Generate and return Excel template file with employer reference.
 
         GET /api/v1/clients/upload-template/
         """
+        from apps.employers.models import Employer
+        from openpyxl.styles import Font, PatternFill, Alignment
+
         # Create workbook
         wb = Workbook()
-        ws = wb.active
-        ws.title = "Client Upload Template"
 
-        # Define headers
+        # Sheet 1: Client Data Template
+        ws1 = wb.active
+        ws1.title = "Client Data"
+
+        # Define headers (matching frontend form order exactly)
         headers = [
-            'Full Name',
-            'National ID',
-            'Mobile',
-            'Email',
-            'Employer ID',
+            'Full Name *',
+            'National ID Number *',
+            'Mobile Number *',
+            'Email Address',
+            'Employer Name *',
             'Employee ID',
-            'Loan Amount',
-            'Interest Rate',
-            'Start Date',
-            'Repayment Period',
-            'Disbursement Date',
-            'Disbursement Method',
-            'Amount Paid',
+            'Loan Amount (KES) *',
+            'Interest Rate (%) *',
+            'Loan Start Date *',
+            'Repayment Period (Months) *',
+            'Disbursement Date *',
+            'Disbursement Method *',
+            'Amount Paid to Date (KES)',
             'Loan Status'
         ]
 
-        # Write headers
-        for col, header in enumerate(headers, start=1):
-            ws.cell(row=1, column=col, value=header)
+        # Style for headers
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="008080", end_color="008080", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        # Add sample data
-        sample_data = [
-            'John Kamau',
-            '12345678',
-            '0712345678',
-            'john@example.com',
-            '[Employer UUID]',
-            'EMP-1234',
-            100000,
-            5,
-            '2025-01-01',
-            6,
-            '2025-01-05',
-            'mpesa',
-            0,
-            'Active'
+        # Write headers with styling
+        for col, header in enumerate(headers, start=1):
+            cell = ws1.cell(row=1, column=col, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+
+        # Adjust column widths
+        column_widths = [20, 18, 15, 25, 25, 15, 18, 15, 18, 22, 18, 20, 22, 15]
+        for col, width in enumerate(column_widths, start=1):
+            ws1.column_dimensions[ws1.cell(row=1, column=col).column_letter].width = width
+
+        # Add sample data rows
+        sample_data_rows = [
+            [
+                'John Kamau',
+                '12345678',
+                '0712345678',
+                'john@example.com',
+                'Safaricom PLC',  # Use employer name instead of ID
+                'EMP-1234',
+                100000,
+                5,
+                '2026-01-01',
+                6,
+                '2026-01-05',
+                'mpesa',
+                0,
+                'Active'
+            ],
+            [
+                'Jane Wanjiku',
+                '87654321',
+                '0723456789',
+                'jane@example.com',
+                'Kenya Power',
+                'EMP-5678',
+                150000,
+                5,
+                '2026-02-01',
+                12,
+                '2026-02-05',
+                'bank',
+                25000,
+                'Active'
+            ]
         ]
 
-        for col, value in enumerate(sample_data, start=1):
-            ws.cell(row=2, column=col, value=value)
+        for row_idx, sample_data in enumerate(sample_data_rows, start=2):
+            for col, value in enumerate(sample_data, start=1):
+                ws1.cell(row=row_idx, column=col, value=value)
+
+        # Add instructions row
+        ws1.cell(row=4, column=1, value="INSTRUCTIONS:")
+        ws1.cell(row=4, column=1).font = Font(bold=True, color="FF0000")
+
+        instructions = [
+            "1. Fields marked with * are required",
+            "2. Use exact employer name from 'Employer Reference' sheet",
+            "3. Dates must be in YYYY-MM-DD format (e.g., 2026-01-15)",
+            "4. Disbursement Method: mpesa, bank, or cash",
+            "5. Loan Status: Active, Fully Paid, Defaulted, or Restructured",
+            "6. Delete sample rows and this instruction section before uploading"
+        ]
+
+        for idx, instruction in enumerate(instructions, start=5):
+            ws1.cell(row=idx, column=1, value=instruction)
+            ws1.cell(row=idx, column=1).font = Font(italic=True, color="666666")
+
+        # Sheet 2: Employer Reference
+        ws2 = wb.create_sheet(title="Employer Reference")
+
+        # Employer reference headers
+        ws2.cell(row=1, column=1, value="Employer Name")
+        ws2.cell(row=1, column=2, value="Employer ID (for reference)")
+        ws2.cell(row=1, column=1).font = header_font
+        ws2.cell(row=1, column=2).font = header_font
+        ws2.cell(row=1, column=1).fill = header_fill
+        ws2.cell(row=1, column=2).fill = header_fill
+        ws2.cell(row=1, column=1).alignment = header_alignment
+        ws2.cell(row=1, column=2).alignment = header_alignment
+
+        # Set column widths
+        ws2.column_dimensions['A'].width = 35
+        ws2.column_dimensions['B'].width = 40
+
+        # Add active employers
+        employers = Employer.objects.filter(is_active=True).order_by('name')
+        for idx, employer in enumerate(employers, start=2):
+            ws2.cell(row=idx, column=1, value=employer.name)
+            ws2.cell(row=idx, column=2, value=str(employer.id))
+
+        # Add note at the bottom
+        note_row = len(employers) + 3
+        ws2.cell(row=note_row, column=1, value="NOTE: Copy the exact employer name to the 'Client Data' sheet")
+        ws2.cell(row=note_row, column=1).font = Font(bold=True, color="0000FF")
 
         # Save to BytesIO
         output = BytesIO()
@@ -597,3 +906,155 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
             'detail': f'{updated_count} client(s) approved successfully',
             'approved_count': updated_count
         })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def download_client_template(request):
+    """
+    Standalone view to download Excel template for bulk client upload.
+    No authentication required.
+    
+    GET /api/v1/clients/template-download/
+    """
+    from apps.employers.models import Employer
+    
+    # Create workbook
+    wb = Workbook()
+    
+    # Sheet 1: Client Data Template
+    ws1 = wb.active
+    ws1.title = "Client Data"
+    
+    # Define headers (matching frontend form order exactly)
+    headers = [
+        'Full Name *',
+        'National ID Number *',
+        'Mobile Number *',
+        'Email Address',
+        'Employer Name *',
+        'Employee ID',
+        'Loan Amount (KES) *',
+        'Interest Rate (%) *',
+        'Loan Start Date *',
+        'Repayment Period (Months) *',
+        'Disbursement Date *',
+        'Disbursement Method *',
+        'Amount Paid to Date (KES)',
+        'Loan Status'
+    ]
+    
+    # Style for headers
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="008080", end_color="008080", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    
+    # Write headers with styling
+    for col, header in enumerate(headers, start=1):
+        cell = ws1.cell(row=1, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+    
+    # Adjust column widths
+    column_widths = [20, 18, 15, 25, 25, 15, 18, 15, 18, 22, 18, 20, 22, 15]
+    for col, width in enumerate(column_widths, start=1):
+        ws1.column_dimensions[ws1.cell(row=1, column=col).column_letter].width = width
+    
+    # Add sample data rows
+    sample_data_rows = [
+        [
+            'John Kamau',
+            '12345678',
+            '0712345678',
+            'john@example.com',
+            'Safaricom PLC',
+            'EMP-1234',
+            100000,
+            5,
+            '2026-01-01',
+            6,
+            '2026-01-05',
+            'mpesa',
+            0,
+            'Active'
+        ],
+        [
+            'Jane Wanjiku',
+            '87654321',
+            '0723456789',
+            'jane@example.com',
+            'Kenya Power',
+            'EMP-5678',
+            150000,
+            5,
+            '2026-02-01',
+            12,
+            '2026-02-05',
+            'bank',
+            25000,
+            'Active'
+        ]
+    ]
+    
+    for row_idx, sample_data in enumerate(sample_data_rows, start=2):
+        for col, value in enumerate(sample_data, start=1):
+            ws1.cell(row=row_idx, column=col, value=value)
+    
+    # Add instructions row
+    ws1.cell(row=4, column=1, value="INSTRUCTIONS:")
+    ws1.cell(row=4, column=1).font = Font(bold=True, color="FF0000")
+    
+    instructions = [
+        "1. Fields marked with * are required",
+        "2. Use exact employer name from 'Employer Reference' sheet",
+        "3. Dates must be in YYYY-MM-DD format (e.g., 2026-01-15)",
+        "4. Disbursement Method: mpesa, bank, or cash",
+        "5. Loan Status: Active, Fully Paid, Defaulted, or Restructured",
+        "6. Delete sample rows and this instruction section before uploading"
+    ]
+    
+    for idx, instruction in enumerate(instructions, start=5):
+        ws1.cell(row=idx, column=1, value=instruction)
+        ws1.cell(row=idx, column=1).font = Font(italic=True, color="666666")
+    
+    # Sheet 2: Employer Reference
+    ws2 = wb.create_sheet(title="Employer Reference")
+    
+    # Employer reference headers
+    ws2.cell(row=1, column=1, value="Employer Name")
+    ws2.cell(row=1, column=2, value="Employer ID (for reference)")
+    ws2.cell(row=1, column=1).font = header_font
+    ws2.cell(row=1, column=2).font = header_font
+    ws2.cell(row=1, column=1).fill = header_fill
+    ws2.cell(row=1, column=2).fill = header_fill
+    ws2.cell(row=1, column=1).alignment = header_alignment
+    ws2.cell(row=1, column=2).alignment = header_alignment
+    
+    # Set column widths
+    ws2.column_dimensions['A'].width = 35
+    ws2.column_dimensions['B'].width = 40
+    
+    # Add active employers
+    employers = Employer.objects.filter(is_active=True).order_by('name')
+    for idx, employer in enumerate(employers, start=2):
+        ws2.cell(row=idx, column=1, value=employer.name)
+        ws2.cell(row=idx, column=2, value=str(employer.id))
+    
+    # Add note at the bottom
+    note_row = len(employers) + 3
+    ws2.cell(row=note_row, column=1, value="NOTE: Copy the exact employer name to the 'Client Data' sheet")
+    ws2.cell(row=note_row, column=1).font = Font(bold=True, color="0000FF")
+    
+    # Save to BytesIO
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    response = HttpResponse(
+        output.read(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = 'attachment; filename=client_upload_template.xlsx'
+    
+    return response
