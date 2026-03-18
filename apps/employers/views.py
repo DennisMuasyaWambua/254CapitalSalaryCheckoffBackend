@@ -62,8 +62,22 @@ class EmployerListView(APIView):
 
     def get(self, request):
         """List employers."""
-        # Get all active employers
-        employers = Employer.objects.filter(is_active=True)
+        from django.db.models import Count
+
+        # Get all active employers with annotated counts
+        employers = Employer.objects.filter(is_active=True).annotate(
+            total_employees=Count('employees', distinct=True),
+            active_loans_count=Count(
+                'loan_applications',
+                filter=Q(loan_applications__status='disbursed'),
+                distinct=True
+            ),
+            pending_applications_count=Count(
+                'loan_applications',
+                filter=Q(loan_applications__status='submitted'),
+                distinct=True
+            )
+        )
 
         # Apply search filter
         search = request.query_params.get('search', '').strip()
