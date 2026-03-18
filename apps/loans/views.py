@@ -11,9 +11,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.db.models import Q
+from django.db.models import Q, Count, Sum
 from django.utils import timezone
 from decimal import Decimal
+from datetime import date
 
 from .models import LoanApplication, LoanStatusHistory, RepaymentSchedule
 from .serializers import (
@@ -400,7 +401,7 @@ class HRPendingApplicationsView(APIView):
         applications = LoanApplication.objects.filter(
             employer=hr_profile.employer,
             status=LoanApplication.Status.SUBMITTED
-        ).select_related('employee', 'employer').order_by('-created_at')
+        ).select_related('employee', 'employee__employee_profile', 'employer').order_by('-created_at')
 
         # Apply search filter
         search = request.query_params.get('search', '').strip()
@@ -435,7 +436,7 @@ class HRAllApplicationsView(APIView):
         # Get all applications for employer
         applications = LoanApplication.objects.filter(
             employer=hr_profile.employer
-        ).select_related('employee', 'employer').order_by('-created_at')
+        ).select_related('employee', 'employee__employee_profile', 'employer').order_by('-created_at')
 
         # Apply status filter
         status_filter = request.query_params.get('status')
@@ -728,6 +729,169 @@ class HRBatchApprovalView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+class HRDashboardStatsView(APIView):
+    """
+    GET /api/v1/loans/hr/dashboard-stats/
+    Get aggregated dashboard statistics for HR's employer.
+
+    Returns:
+    - Pending applications count
+    - Applications approved this month
+    - Active loans count
+    - Monthly remittance total
+    - Deduction breakdown (this month vs next month)
+    - Recent remittance submissions
+    """
+
+    permission_classes = [IsAuthenticated, IsHRManager]
+
+    def get(self, request):
+        """Get HR dashboard statistics."""
+        try:
+            hr_profile = request.user.hr_profile
+        except AttributeError:
+            return Response(
+                {'detail': 'HR profile not found.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        employer = hr_profile.employer
+
+        # Get current date and month boundaries
+        now = timezone.now()
+        first_day_of_month = date(now.year, now.month, 1)
+
+        # Calculate all loan statistics in a single aggregated query
+        loan_stats = LoanApplication.objects.filter(
+            employer=employer
+        ).aggregate(
+            pending_count=Count('id', filter=Q(status=LoanApplication.Status.SUBMITTED)),
+            approved_this_month=Count(
+                'id',
+                filter=Q(
+                    status=LoanApplication.Status.UNDER_REVIEW_ADMIN,
+                    updated_at__gte=first_day_of_month
+                )
+            ),
+            active_loans_count=Count(
+                'id',
+                filter=Q(status__in=[
+                    LoanApplication.Status.DISBURSED,
+                    LoanApplication.Status.APPROVED
+                ])
+            ),
+            monthly_remittance=Sum(
+                'monthly_deduction',
+                filter=Q(status=LoanApplication.Status.DISBURSED)
+            ),
+            deduct_this_month_count=Count(
+                'id',
+                filter=Q(
+                    status=LoanApplication.Status.DISBURSED,
+                    disbursement_date__isnull=False,
+                    disbursement_date__day__lte=15,
+                    disbursement_date__month=now.month,
+                    disbursement_date__year=now.year
+                )
+            ),
+            deduct_this_month_amount=Sum(
+                'monthly_deduction',
+                filter=Q(
+                    status=LoanApplication.Status.DISBURSED,
+                    disbursement_date__isnull=False,
+                    disbursement_date__day__lte=15,
+                    disbursement_date__month=now.month,
+                    disbursement_date__year=now.year
+                )
+            ),
+            deduct_next_month_count=Count(
+                'id',
+                filter=Q(
+                    status=LoanApplication.Status.DISBURSED,
+                    disbursement_date__isnull=False,
+                    disbursement_date__day__gt=15,
+                    disbursement_date__month=now.month,
+                    disbursement_date__year=now.year
+                )
+            ),
+            deduct_next_month_amount=Sum(
+                'monthly_deduction',
+                filter=Q(
+                    status=LoanApplication.Status.DISBURSED,
+                    disbursement_date__isnull=False,
+                    disbursement_date__day__gt=15,
+                    disbursement_date__month=now.month,
+                    disbursement_date__year=now.year
+                )
+            )
+        )
+
+        # Get recent remittances (from reconciliation app)
+        from apps.reconciliation.models import Remittance
+        recent_remittances = Remittance.objects.filter(
+            employer=employer
+        ).select_related('submitted_by', 'confirmed_by').order_by(
+            '-period_year', '-period_month'
+        )[:3]
+
+        # Get remittance status counts
+        remittance_stats = Remittance.objects.filter(
+            employer=employer,
+            period_year=now.year
+        ).aggregate(
+            pending_count=Count('id', filter=Q(status='pending')),
+            confirmed_count=Count('id', filter=Q(status='confirmed'))
+        )
+
+        # Format remittance data
+        remittance_submissions = []
+        for remittance in recent_remittances:
+            month_names = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+            ]
+            period_display = f"{month_names[remittance.period_month - 1]} {remittance.period_year}"
+
+            remittance_submissions.append({
+                'id': str(remittance.id),
+                'period_month': remittance.period_month,
+                'period_year': remittance.period_year,
+                'period_display': period_display,
+                'total_amount': float(remittance.total_amount),
+                'status': remittance.status,
+                'submitted_at': remittance.submitted_at.isoformat()
+            })
+
+        # Build response
+        response_data = {
+            'statistics': {
+                'pending_applications': loan_stats['pending_count'] or 0,
+                'approved_this_month': loan_stats['approved_this_month'] or 0,
+                'active_loans': loan_stats['active_loans_count'] or 0,
+                'monthly_remittance': float(loan_stats['monthly_remittance'] or Decimal('0.00'))
+            },
+            'deduction_breakdown': {
+                'this_month': {
+                    'count': loan_stats['deduct_this_month_count'] or 0,
+                    'total_amount': float(loan_stats['deduct_this_month_amount'] or Decimal('0.00'))
+                },
+                'next_month': {
+                    'count': loan_stats['deduct_next_month_count'] or 0,
+                    'total_amount': float(loan_stats['deduct_next_month_amount'] or Decimal('0.00'))
+                }
+            },
+            'remittance_summary': {
+                'recent_submissions': remittance_submissions,
+                'pending_count': remittance_stats['pending_count'] or 0,
+                'confirmed_count': remittance_stats['confirmed_count'] or 0
+            }
+        }
+
+        logger.info(f'HR dashboard stats retrieved for employer {employer.name} by user {request.user.id}')
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
 # ADMIN VIEWS
 
 class AdminAssessmentQueueView(APIView):
@@ -742,7 +906,7 @@ class AdminAssessmentQueueView(APIView):
         """List applications in assessment queue."""
         applications = LoanApplication.objects.filter(
             status=LoanApplication.Status.UNDER_REVIEW_ADMIN
-        ).select_related('employee', 'employer').order_by('-created_at')
+        ).select_related('employee', 'employee__employee_profile', 'employer').order_by('-created_at')
 
         # Apply employer filter
         employer_id = request.query_params.get('employer')

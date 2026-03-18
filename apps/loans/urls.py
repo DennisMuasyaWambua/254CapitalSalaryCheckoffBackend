@@ -16,6 +16,7 @@ urlpatterns = [
     # HR endpoints
     path('hr/pending/', views.HRPendingApplicationsView.as_view(), name='hr-pending'),
     path('hr/all/', views.HRAllApplicationsView.as_view(), name='hr-all'),
+    path('hr/dashboard-stats/', views.HRDashboardStatsView.as_view(), name='hr-dashboard-stats'),
     path('hr/<uuid:pk>/review/', views.HRReviewApplicationView.as_view(), name='hr-review'),
     path('hr/batch-approval/', views.HRBatchApprovalView.as_view(), name='hr-batch-approval'),
 

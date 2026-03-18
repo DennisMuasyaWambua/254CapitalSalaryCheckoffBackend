@@ -52,6 +52,7 @@ class LoanApplicationListSerializer(serializers.ModelSerializer):
     employee_name = serializers.SerializerMethodField()
     employer_name = serializers.CharField(source='employer.name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
+    department = serializers.SerializerMethodField()
 
     class Meta:
         model = LoanApplication
@@ -59,13 +60,20 @@ class LoanApplicationListSerializer(serializers.ModelSerializer):
             'id', 'application_number', 'employee', 'employee_name',
             'employer', 'employer_name', 'principal_amount',
             'total_repayment', 'monthly_deduction', 'repayment_months',
-            'status', 'status_display', 'created_at', 'disbursement_date'
+            'status', 'status_display', 'created_at', 'disbursement_date',
+            'department'
         ]
         read_only_fields = ['id', 'application_number', 'created_at']
 
     def get_employee_name(self, obj):
         """Get employee's full name."""
         return obj.employee.get_full_name() or obj.employee.phone_number
+
+    def get_department(self, obj):
+        """Get employee's department from profile."""
+        if hasattr(obj.employee, 'employee_profile'):
+            return obj.employee.employee_profile.department or 'N/A'
+        return 'N/A'
 
 
 class LoanApplicationDetailSerializer(serializers.ModelSerializer):
