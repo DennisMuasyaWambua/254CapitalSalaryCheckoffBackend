@@ -5,7 +5,7 @@ Employer management APIViews.
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db.models import Q
 from django.db import transaction
 from datetime import datetime
@@ -55,30 +55,15 @@ class EmployerListView(APIView):
     - Pagination
 
     Used for registration dropdown (employees) and browsing (HR/Admin).
+    Public endpoint - no authentication required for employee self-registration.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def get(self, request):
         """List employers."""
-        from django.db.models import Count
-        from apps.accounts.models import EmployeeProfile
-        from apps.loans.models import LoanApplication
-
-        # Get all active employers with annotations
-        employers = Employer.objects.filter(is_active=True).annotate(
-            total_employees=Count('employeeprofile', distinct=True),
-            active_loans_count=Count(
-                'employeeprofile__user__employee_applications',
-                filter=Q(employeeprofile__user__employee_applications__status='active'),
-                distinct=True
-            ),
-            pending_applications_count=Count(
-                'employeeprofile__user__employee_applications',
-                filter=Q(employeeprofile__user__employee_applications__status='pending_hr_review'),
-                distinct=True
-            )
-        )
+        # Get all active employers
+        employers = Employer.objects.filter(is_active=True)
 
         # Apply search filter
         search = request.query_params.get('search', '').strip()
@@ -111,6 +96,23 @@ class EmployerCreateView(APIView):
         """Create new employer and HR manager account."""
         serializer = EmployerCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        # Check if user with this phone or email already exists
+        hr_phone = serializer.validated_data.get('hr_contact_phone')
+        hr_email = serializer.validated_data.get('hr_contact_email')
+
+        existing_user = CustomUser.objects.filter(
+            Q(phone_number=hr_phone) | Q(email=hr_email)
+        ).first()
+
+        if existing_user:
+            return Response(
+                {
+                    'detail': f'A user with this phone number or email already exists. Please use a different HR contact.',
+                    'code': 'duplicate_user'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         # Use transaction to ensure all operations succeed or fail together
         with transaction.atomic():
