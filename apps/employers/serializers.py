@@ -13,6 +13,7 @@ class EmployerListSerializer(serializers.ModelSerializer):
     total_employees = serializers.IntegerField(read_only=True)
     active_loans_count = serializers.IntegerField(read_only=True)
     pending_applications_count = serializers.IntegerField(read_only=True)
+    onboarded_date = serializers.SerializerMethodField()
 
     class Meta:
         model = Employer
@@ -20,9 +21,15 @@ class EmployerListSerializer(serializers.ModelSerializer):
             'id', 'name', 'registration_number', 'address',
             'payroll_cycle_day', 'hr_contact_name', 'hr_contact_email',
             'hr_contact_phone', 'is_active', 'onboarded_by', 'onboarded_at',
-            'updated_at', 'total_employees', 'active_loans_count',
+            'onboarded_date', 'updated_at', 'total_employees', 'active_loans_count',
             'pending_applications_count'
         ]
+
+    def get_onboarded_date(self, obj):
+        """Format onboarded_at as dd/mm/yy."""
+        if obj.onboarded_at:
+            return obj.onboarded_at.strftime('%d/%m/%y')
+        return 'N/A'
 
 
 class EmployerDetailSerializer(serializers.ModelSerializer):
