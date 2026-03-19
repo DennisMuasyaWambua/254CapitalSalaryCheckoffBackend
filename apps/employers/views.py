@@ -69,12 +69,12 @@ class EmployerListView(APIView):
             total_employees=Count('employees', distinct=True),
             active_loans_count=Count(
                 'loan_applications',
-                filter=Q(status='disbursed'),
+                filter=Q(loan_applications__status='disbursed'),
                 distinct=True
             ),
             pending_applications_count=Count(
                 'loan_applications',
-                filter=Q(status='submitted'),
+                filter=Q(loan_applications__status='submitted'),
                 distinct=True
             )
         )
