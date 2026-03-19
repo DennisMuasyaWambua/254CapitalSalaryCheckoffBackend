@@ -75,17 +75,3 @@ class Employer(models.Model):
             self.hr_contact_phone = normalize_kenyan_phone(self.hr_contact_phone)
         super().save(*args, **kwargs)
 
-    @property
-    def total_employees(self):
-        """Get total number of employees for this employer."""
-        return self.employees.count()
-
-    @property
-    def active_loans_count(self):
-        """Get count of active (disbursed) loans for this employer."""
-        return self.loan_applications.filter(status='disbursed').count()
-
-    @property
-    def pending_applications_count(self):
-        """Get count of pending applications (submitted) for this employer."""
-        return self.loan_applications.filter(status='submitted').count()
