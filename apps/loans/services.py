@@ -23,15 +23,25 @@ def calculate_flat_interest(
     months: int = 6
 ) -> Dict[str, Decimal]:
     """
-    Calculate loan repayment using flat interest rate.
+    Calculate loan repayment using flat interest rate per month.
+
+    The interest is calculated as a fixed percentage of the principal for each month.
 
     Formula:
-        total_repayment = principal * (1 + rate)
+        interest_per_month = principal * rate
+        total_interest = interest_per_month * months
+        total_repayment = principal + total_interest
         monthly_deduction = total_repayment / months
+
+    Examples:
+        - 1 month at 5%: total = 100,000 + (5,000 * 1) = 105,000
+        - 3 months at 5%: total = 100,000 + (5,000 * 3) = 115,000
+        - 6 months at 5%: total = 100,000 + (5,000 * 6) = 130,000
+        - 12 months at 5%: total = 100,000 + (5,000 * 12) = 160,000
 
     Args:
         principal: Loan principal amount
-        rate: Interest rate (default: 0.05 = 5%)
+        rate: Monthly interest rate (default: 0.05 = 5% per month)
         months: Repayment period in months
 
     Returns:
@@ -39,14 +49,14 @@ def calculate_flat_interest(
             - total_repayment: Total amount to be repaid
             - monthly_deduction: Monthly deduction amount
             - interest_amount: Total interest amount
-            - interest_rate: Interest rate used
+            - interest_rate: Monthly interest rate used
 
     Example:
         >>> calculate_flat_interest(Decimal('100000'), Decimal('0.05'), 6)
         {
-            'total_repayment': Decimal('105000.00'),
-            'monthly_deduction': Decimal('17500.00'),
-            'interest_amount': Decimal('5000.00'),
+            'total_repayment': Decimal('130000.00'),
+            'monthly_deduction': Decimal('21666.67'),
+            'interest_amount': Decimal('30000.00'),
             'interest_rate': Decimal('0.05')
         }
     """
@@ -54,8 +64,15 @@ def calculate_flat_interest(
     principal = Decimal(str(principal))
     rate = Decimal(str(rate))
 
-    # Calculate total repayment: principal * (1 + rate)
-    total_repayment = principal * (Decimal('1') + rate)
+    # Calculate interest per month
+    interest_per_month = principal * rate
+
+    # Calculate total interest: interest_per_month * number of months
+    total_interest = interest_per_month * Decimal(str(months))
+    total_interest = total_interest.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+    # Calculate total repayment: principal + total_interest
+    total_repayment = principal + total_interest
     total_repayment = total_repayment.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
     # Calculate monthly deduction: total / months
