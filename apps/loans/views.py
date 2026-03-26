@@ -897,16 +897,25 @@ class HRDashboardStatsView(APIView):
 class AdminAssessmentQueueView(APIView):
     """
     GET /api/v1/loans/admin/queue/
-    List applications awaiting credit assessment (status=under_review_admin).
+    List all loan applications for admin with complete disbursement details.
+    Includes bank details and M-Pesa information from employee profiles.
     """
 
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
-        """List applications in assessment queue."""
-        applications = LoanApplication.objects.filter(
-            status=LoanApplication.Status.UNDER_REVIEW_ADMIN
-        ).select_related('employee', 'employee__employee_profile', 'employer').order_by('-created_at')
+        """List all applications with disbursement details."""
+        # Fetch all applications with related employee profile data for disbursement info
+        applications = LoanApplication.objects.select_related(
+            'employee',
+            'employee__employee_profile',
+            'employer'
+        ).order_by('-created_at')
+
+        # Apply status filter if provided
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            applications = applications.filter(status=status_filter)
 
         # Apply employer filter
         employer_id = request.query_params.get('employer')

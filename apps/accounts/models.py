@@ -182,6 +182,11 @@ class EmployeeProfile(models.Model):
 
     # Bank account details for disbursement
     bank_name = models.CharField(max_length=100)
+    bank_branch = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text='Bank branch name'
+    )
     bank_account_number = models.CharField(max_length=50)
 
     # M-Pesa number for alternative disbursement

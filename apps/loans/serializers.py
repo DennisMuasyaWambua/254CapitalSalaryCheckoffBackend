@@ -54,6 +54,7 @@ class LoanApplicationListSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     department = serializers.SerializerMethodField()
     bank_name = serializers.SerializerMethodField()
+    bank_branch = serializers.SerializerMethodField()
     bank_account_number = serializers.SerializerMethodField()
     mpesa_number = serializers.SerializerMethodField()
 
@@ -65,7 +66,7 @@ class LoanApplicationListSerializer(serializers.ModelSerializer):
             'total_repayment', 'monthly_deduction', 'repayment_months',
             'status', 'status_display', 'created_at', 'disbursement_date',
             'department', 'disbursement_method', 'disbursement_reference',
-            'bank_name', 'bank_account_number', 'mpesa_number'
+            'bank_name', 'bank_branch', 'bank_account_number', 'mpesa_number'
         ]
         read_only_fields = ['id', 'application_number', 'created_at']
 
@@ -83,6 +84,12 @@ class LoanApplicationListSerializer(serializers.ModelSerializer):
         """Get employee's bank name from profile."""
         if hasattr(obj.employee, 'employee_profile'):
             return obj.employee.employee_profile.bank_name or ''
+        return ''
+
+    def get_bank_branch(self, obj):
+        """Get employee's bank branch from profile."""
+        if hasattr(obj.employee, 'employee_profile'):
+            return obj.employee.employee_profile.bank_branch or ''
         return ''
 
     def get_bank_account_number(self, obj):
@@ -115,6 +122,12 @@ class LoanApplicationDetailSerializer(serializers.ModelSerializer):
     total_paid = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     outstanding_balance = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
 
+    # Disbursement details from employee profile
+    bank_name = serializers.SerializerMethodField()
+    bank_branch = serializers.SerializerMethodField()
+    account_number = serializers.SerializerMethodField()
+    mpesa_number = serializers.SerializerMethodField()
+
     class Meta:
         model = LoanApplication
         fields = [
@@ -127,7 +140,8 @@ class LoanApplicationDetailSerializer(serializers.ModelSerializer):
             'terms_accepted', 'terms_accepted_at',
             'created_at', 'updated_at', 'is_active', 'can_be_edited',
             'total_paid', 'outstanding_balance',
-            'status_history', 'repayment_schedule'
+            'status_history', 'repayment_schedule',
+            'bank_name', 'bank_branch', 'account_number', 'mpesa_number'
         ]
         read_only_fields = [
             'id', 'application_number', 'employee', 'employer',
@@ -136,6 +150,30 @@ class LoanApplicationDetailSerializer(serializers.ModelSerializer):
             'disbursement_method', 'disbursement_reference',
             'terms_accepted_at', 'created_at', 'updated_at'
         ]
+
+    def get_bank_name(self, obj):
+        """Get employee's bank name from profile."""
+        if hasattr(obj.employee, 'employee_profile'):
+            return obj.employee.employee_profile.bank_name or ''
+        return ''
+
+    def get_bank_branch(self, obj):
+        """Get employee's bank branch from profile."""
+        if hasattr(obj.employee, 'employee_profile'):
+            return obj.employee.employee_profile.bank_branch or ''
+        return ''
+
+    def get_account_number(self, obj):
+        """Get employee's bank account number from profile."""
+        if hasattr(obj.employee, 'employee_profile'):
+            return obj.employee.employee_profile.bank_account_number or ''
+        return ''
+
+    def get_mpesa_number(self, obj):
+        """Get employee's M-Pesa number from profile."""
+        if hasattr(obj.employee, 'employee_profile'):
+            return obj.employee.employee_profile.mpesa_number or obj.employee.phone_number
+        return obj.employee.phone_number
 
 
 class LoanApplicationCreateSerializer(serializers.Serializer):
