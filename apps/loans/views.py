@@ -100,6 +100,7 @@ class LoanApplicationListCreateView(APIView):
             employer=employee_profile.employer,
             principal_amount=serializer.validated_data['principal_amount'],
             repayment_months=serializer.validated_data['repayment_months'],
+            disbursement_method=serializer.validated_data['disbursement_method'],
             purpose=serializer.validated_data.get('purpose', ''),
             total_repayment=calc['total_repayment'],
             monthly_deduction=calc['monthly_deduction'],
@@ -1156,7 +1157,8 @@ class AdminDisbursementView(APIView):
         serializer.is_valid(raise_exception=True)
 
         disbursement_date = serializer.validated_data['disbursement_date']
-        disbursement_method = serializer.validated_data['disbursement_method']
+        # Use employee's preferred disbursement method if not provided by admin
+        disbursement_method = serializer.validated_data.get('disbursement_method') or app.disbursement_method or 'mpesa'
         disbursement_reference = serializer.validated_data['disbursement_reference']
 
         # Calculate first deduction date
@@ -1166,7 +1168,9 @@ class AdminDisbursementView(APIView):
         app.status = LoanApplication.Status.DISBURSED
         app.disbursement_date = disbursement_date
         app.first_deduction_date = first_deduction
-        app.disbursement_method = disbursement_method
+        # Only update disbursement_method if it wasn't already set by employee
+        if not app.disbursement_method:
+            app.disbursement_method = disbursement_method
         app.disbursement_reference = disbursement_reference
         app.save()
 

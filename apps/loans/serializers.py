@@ -188,6 +188,11 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
     repayment_months = serializers.ChoiceField(
         choices=settings.LOAN_REPAYMENT_TERMS
     )
+    disbursement_method = serializers.ChoiceField(
+        choices=LoanApplication.DisbursementMethod.choices,
+        required=True,
+        help_text='Preferred disbursement method (bank or mpesa)'
+    )
     purpose = serializers.CharField(
         max_length=500,
         required=False,
@@ -331,7 +336,9 @@ class AdminDisbursementSerializer(serializers.Serializer):
 
     disbursement_date = serializers.DateField()
     disbursement_method = serializers.ChoiceField(
-        choices=LoanApplication.DisbursementMethod.choices
+        choices=LoanApplication.DisbursementMethod.choices,
+        required=False,
+        help_text='Disbursement method (optional - uses employee preference if not provided)'
     )
     disbursement_reference = serializers.CharField(max_length=100)
 
@@ -354,7 +361,7 @@ class LoanApplicationUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = LoanApplication
-        fields = ['principal_amount', 'repayment_months', 'purpose']
+        fields = ['principal_amount', 'repayment_months', 'disbursement_method', 'purpose']
 
     def validate_principal_amount(self, value):
         """Validate principal amount."""
