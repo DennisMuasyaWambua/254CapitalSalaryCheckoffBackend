@@ -53,6 +53,9 @@ class LoanApplicationListSerializer(serializers.ModelSerializer):
     employer_name = serializers.CharField(source='employer.name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     department = serializers.SerializerMethodField()
+    bank_name = serializers.SerializerMethodField()
+    bank_account_number = serializers.SerializerMethodField()
+    mpesa_number = serializers.SerializerMethodField()
 
     class Meta:
         model = LoanApplication
@@ -61,7 +64,8 @@ class LoanApplicationListSerializer(serializers.ModelSerializer):
             'employer', 'employer_name', 'principal_amount',
             'total_repayment', 'monthly_deduction', 'repayment_months',
             'status', 'status_display', 'created_at', 'disbursement_date',
-            'department'
+            'department', 'disbursement_method', 'disbursement_reference',
+            'bank_name', 'bank_account_number', 'mpesa_number'
         ]
         read_only_fields = ['id', 'application_number', 'created_at']
 
@@ -74,6 +78,24 @@ class LoanApplicationListSerializer(serializers.ModelSerializer):
         if hasattr(obj.employee, 'employee_profile'):
             return obj.employee.employee_profile.department or 'N/A'
         return 'N/A'
+
+    def get_bank_name(self, obj):
+        """Get employee's bank name from profile."""
+        if hasattr(obj.employee, 'employee_profile'):
+            return obj.employee.employee_profile.bank_name or ''
+        return ''
+
+    def get_bank_account_number(self, obj):
+        """Get employee's bank account number from profile."""
+        if hasattr(obj.employee, 'employee_profile'):
+            return obj.employee.employee_profile.bank_account_number or ''
+        return ''
+
+    def get_mpesa_number(self, obj):
+        """Get employee's M-Pesa number from profile."""
+        if hasattr(obj.employee, 'employee_profile'):
+            return obj.employee.employee_profile.mpesa_number or obj.employee.phone_number
+        return obj.employee.phone_number
 
 
 class LoanApplicationDetailSerializer(serializers.ModelSerializer):
