@@ -959,10 +959,10 @@ class AdminCreditAssessmentView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Check status
-        if app.status != LoanApplication.Status.UNDER_REVIEW_ADMIN:
+        # Check status - now accepting submitted applications directly (HR step removed)
+        if app.status != LoanApplication.Status.SUBMITTED:
             return Response(
-                {'detail': 'Only applications under admin review can be assessed.'},
+                {'detail': 'Only submitted applications can be assessed.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 

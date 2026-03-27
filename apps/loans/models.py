@@ -19,8 +19,6 @@ class LoanApplication(models.Model):
 
     class Status(models.TextChoices):
         SUBMITTED = 'submitted', 'Submitted'
-        UNDER_REVIEW_HR = 'under_review_hr', 'Under HR Review'
-        UNDER_REVIEW_ADMIN = 'under_review_admin', 'Under 254 Capital Review'
         APPROVED = 'approved', 'Approved'
         DECLINED = 'declined', 'Declined'
         DISBURSED = 'disbursed', 'Disbursed'
@@ -166,14 +164,9 @@ class LoanApplication(models.Model):
         return self.status == self.Status.SUBMITTED
 
     @property
-    def can_be_reviewed_by_hr(self):
-        """Check if application is ready for HR review."""
-        return self.status == self.Status.SUBMITTED
-
-    @property
     def can_be_reviewed_by_admin(self):
         """Check if application is ready for admin credit assessment."""
-        return self.status == self.Status.UNDER_REVIEW_ADMIN
+        return self.status == self.Status.SUBMITTED
 
     @property
     def can_be_disbursed(self):
