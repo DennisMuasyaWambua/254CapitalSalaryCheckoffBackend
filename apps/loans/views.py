@@ -109,7 +109,11 @@ class LoanApplicationListCreateView(APIView):
             monthly_deduction=calc['monthly_deduction'],
             status=LoanApplication.Status.SUBMITTED,
             terms_accepted=serializer.validated_data['terms_accepted'],
-            terms_accepted_at=timezone.now() if serializer.validated_data['terms_accepted'] else None
+            terms_accepted_at=timezone.now() if serializer.validated_data['terms_accepted'] else None,
+            # Bank details for disbursement
+            bank_name=serializer.validated_data.get('bank_name', ''),
+            bank_branch=serializer.validated_data.get('bank_branch', ''),
+            account_number=serializer.validated_data.get('account_number', ''),
         )
 
         # Create initial status history

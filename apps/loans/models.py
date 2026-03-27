@@ -120,6 +120,23 @@ class LoanApplication(models.Model):
         help_text='Transaction reference for disbursement'
     )
 
+    # Bank details for disbursement (stored per application)
+    bank_name = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text='Bank name for disbursement'
+    )
+    bank_branch = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text='Bank branch name'
+    )
+    account_number = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text='Bank account number for disbursement'
+    )
+
     # Terms and conditions acceptance
     terms_accepted = models.BooleanField(
         default=False,

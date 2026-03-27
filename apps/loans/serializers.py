@@ -81,19 +81,28 @@ class LoanApplicationListSerializer(serializers.ModelSerializer):
         return 'N/A'
 
     def get_bank_name(self, obj):
-        """Get employee's bank name from profile."""
+        """Get bank name from loan application or fall back to employee profile."""
+        # Prefer loan-specific bank details
+        if obj.bank_name:
+            return obj.bank_name
         if hasattr(obj.employee, 'employee_profile'):
             return obj.employee.employee_profile.bank_name or ''
         return ''
 
     def get_bank_branch(self, obj):
-        """Get employee's bank branch from profile."""
+        """Get bank branch from loan application or fall back to employee profile."""
+        # Prefer loan-specific bank details
+        if obj.bank_branch:
+            return obj.bank_branch
         if hasattr(obj.employee, 'employee_profile'):
             return obj.employee.employee_profile.bank_branch or ''
         return ''
 
     def get_bank_account_number(self, obj):
-        """Get employee's bank account number from profile."""
+        """Get bank account number from loan application or fall back to employee profile."""
+        # Prefer loan-specific bank details
+        if obj.account_number:
+            return obj.account_number
         if hasattr(obj.employee, 'employee_profile'):
             return obj.employee.employee_profile.bank_account_number or ''
         return ''
@@ -152,19 +161,28 @@ class LoanApplicationDetailSerializer(serializers.ModelSerializer):
         ]
 
     def get_bank_name(self, obj):
-        """Get employee's bank name from profile."""
+        """Get bank name from loan application or fall back to employee profile."""
+        # Prefer loan-specific bank details
+        if obj.bank_name:
+            return obj.bank_name
         if hasattr(obj.employee, 'employee_profile'):
             return obj.employee.employee_profile.bank_name or ''
         return ''
 
     def get_bank_branch(self, obj):
-        """Get employee's bank branch from profile."""
+        """Get bank branch from loan application or fall back to employee profile."""
+        # Prefer loan-specific bank details
+        if obj.bank_branch:
+            return obj.bank_branch
         if hasattr(obj.employee, 'employee_profile'):
             return obj.employee.employee_profile.bank_branch or ''
         return ''
 
     def get_account_number(self, obj):
-        """Get employee's bank account number from profile."""
+        """Get bank account number from loan application or fall back to employee profile."""
+        # Prefer loan-specific bank details
+        if obj.account_number:
+            return obj.account_number
         if hasattr(obj.employee, 'employee_profile'):
             return obj.employee.employee_profile.bank_account_number or ''
         return ''
@@ -202,6 +220,25 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
         required=True,
         help_text='Confirmation that terms and conditions have been accepted'
     )
+    # Bank details (required when disbursement_method is 'bank')
+    bank_name = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        help_text='Bank name for disbursement'
+    )
+    bank_branch = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        help_text='Bank branch name'
+    )
+    account_number = serializers.CharField(
+        max_length=50,
+        required=False,
+        allow_blank=True,
+        help_text='Bank account number for disbursement'
+    )
 
     def validate_principal_amount(self, value):
         """Validate principal amount is a multiple of 100."""
@@ -219,6 +256,17 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         """Additional validation for loan affordability and eligibility."""
+        # Validate bank details if disbursement method is 'bank'
+        if attrs.get('disbursement_method') == 'bank':
+            if not attrs.get('bank_name'):
+                raise serializers.ValidationError({
+                    'bank_name': 'Bank name is required for bank transfer disbursement.'
+                })
+            if not attrs.get('account_number'):
+                raise serializers.ValidationError({
+                    'account_number': 'Account number is required for bank transfer disbursement.'
+                })
+
         # Get employee profile from context
         request = self.context.get('request')
         if request and hasattr(request.user, 'employee_profile'):
