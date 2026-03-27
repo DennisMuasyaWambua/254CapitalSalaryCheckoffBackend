@@ -959,10 +959,12 @@ class AdminCreditAssessmentView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Check status - now accepting submitted applications directly (HR step removed)
-        if app.status != LoanApplication.Status.SUBMITTED:
+        # Check status - accepting all pre-approval statuses
+        # This includes legacy statuses (under_review_hr, under_review_admin) and new workflow (submitted)
+        valid_statuses = ['submitted', 'under_review_hr', 'under_review_admin']
+        if app.status not in valid_statuses:
             return Response(
-                {'detail': 'Only submitted applications can be assessed.'},
+                {'detail': f'Applications with status "{app.status}" cannot be assessed. Must be in submitted, under_review_hr, or under_review_admin status.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
