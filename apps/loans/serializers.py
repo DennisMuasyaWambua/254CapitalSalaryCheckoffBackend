@@ -495,3 +495,74 @@ class RecordPaymentSerializer(serializers.Serializer):
         if value <= 0:
             raise serializers.ValidationError("Payment amount must be greater than 0.")
         return value
+
+
+class AdminBulkDisbursementSerializer(serializers.Serializer):
+    """
+    Serializer for bulk disbursement request.
+
+    Allows admin to approve and disburse multiple loans in a single operation
+    with idempotency support.
+    """
+
+    loan_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        min_length=1,
+        max_length=100,
+        help_text='List of loan application UUIDs to process'
+    )
+    disbursement_date = serializers.DateField(
+        help_text='Date of disbursement'
+    )
+    reference_prefix = serializers.CharField(
+        max_length=50,
+        help_text='Prefix for disbursement references (e.g., BATCH-MAR27)'
+    )
+    idempotency_key = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        help_text='Unique key to prevent duplicate processing'
+    )
+    auto_approve = serializers.BooleanField(
+        default=True,
+        help_text='If true, approve pending loans before disbursing'
+    )
+
+    def validate_disbursement_date(self, value):
+        """Validate disbursement date is not in the future."""
+        from django.utils import timezone
+        if value > timezone.now().date():
+            raise serializers.ValidationError('Disbursement date cannot be in the future.')
+        return value
+
+    def validate_reference_prefix(self, value):
+        """Ensure reference prefix is provided and clean."""
+        if not value.strip():
+            raise serializers.ValidationError('Reference prefix is required.')
+        return value.strip().upper()
+
+
+class BulkDisbursementResultSerializer(serializers.Serializer):
+    """Serializer for individual loan result in bulk disbursement response."""
+
+    loan_id = serializers.UUIDField()
+    application_number = serializers.CharField(allow_null=True)
+    status = serializers.ChoiceField(choices=['success', 'failed', 'skipped'])
+    loan_status_after = serializers.CharField(required=False, allow_null=True)
+    disbursement_status = serializers.CharField(required=False, allow_null=True)
+    disbursement_reference = serializers.CharField(required=False, allow_null=True)
+    error_code = serializers.CharField(required=False, allow_null=True)
+    error_message = serializers.CharField(required=False, allow_null=True)
+
+
+class AdminBulkDisbursementResponseSerializer(serializers.Serializer):
+    """Serializer for bulk disbursement response."""
+
+    processed_count = serializers.IntegerField()
+    successful_count = serializers.IntegerField()
+    failed_count = serializers.IntegerField()
+    skipped_count = serializers.IntegerField()
+    total_amount_disbursed = serializers.DecimalField(max_digits=14, decimal_places=2)
+    results = BulkDisbursementResultSerializer(many=True)
+    idempotency_key = serializers.CharField()

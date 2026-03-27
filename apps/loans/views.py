@@ -16,13 +16,16 @@ from django.utils import timezone
 from decimal import Decimal
 from datetime import date
 
-from .models import LoanApplication, LoanStatusHistory, RepaymentSchedule
+from .models import LoanApplication, LoanStatusHistory, RepaymentSchedule, IdempotencyLog
 from .serializers import (
     LoanApplicationListSerializer, LoanApplicationDetailSerializer,
     LoanApplicationCreateSerializer, LoanApplicationUpdateSerializer,
     LoanCalculatorSerializer, HRReviewSerializer, BatchApprovalSerializer,
-    AdminCreditAssessmentSerializer, AdminDisbursementSerializer
+    AdminCreditAssessmentSerializer, AdminDisbursementSerializer,
+    AdminBulkDisbursementSerializer
 )
+import hashlib
+import json
 from .services import (
     calculate_flat_interest, calculate_amortized, generate_application_number,
     calculate_first_deduction_date, generate_repayment_schedule
@@ -1303,6 +1306,372 @@ class AdminDisbursementView(APIView):
             'detail': 'Loan disbursed successfully',
             'application': LoanApplicationDetailSerializer(app).data
         }, status=status.HTTP_200_OK)
+
+
+class AdminBulkDisbursementView(APIView):
+    """
+    POST /api/v1/loans/admin/bulk-disburse/
+    Bulk approve and disburse multiple loans.
+
+    Features:
+    - Auto-approval of pending loans before disbursement
+    - Idempotency support to prevent duplicate processing
+    - Per-loan status tracking and error reporting
+    - Atomic transactions for each loan
+    - Comprehensive audit logging
+    """
+
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request):
+        """Process bulk disbursement request."""
+        # 1. Validate request
+        serializer = AdminBulkDisbursementSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        data = serializer.validated_data
+        loan_ids = [str(lid) for lid in data['loan_ids']]
+        disbursement_date = data['disbursement_date']
+        reference_prefix = data['reference_prefix']
+        idempotency_key = data.get('idempotency_key', '').strip()
+        auto_approve = data.get('auto_approve', True)
+
+        # Generate idempotency key if not provided
+        if not idempotency_key:
+            import time
+            import random
+            import string
+            random_suffix = ''.join(random.choices(string.ascii_lowercase + string.digits, k=9))
+            idempotency_key = f'bulk-{int(time.time())}-{random_suffix}'
+
+        # 2. Check idempotency
+        existing_log = IdempotencyLog.objects.filter(
+            idempotency_key=idempotency_key,
+            expires_at__gt=timezone.now()
+        ).first()
+
+        if existing_log:
+            return Response(
+                {
+                    'detail': 'Request with this idempotency key was already processed',
+                    'previous_response': existing_log.response_body
+                },
+                status=status.HTTP_409_CONFLICT
+            )
+
+        # 3. Fetch all loan applications
+        loans = LoanApplication.objects.filter(
+            id__in=loan_ids
+        ).select_related('employee', 'employer')
+        loan_map = {str(loan.id): loan for loan in loans}
+
+        # 4. Process each loan
+        results = []
+        successful_count = 0
+        failed_count = 0
+        skipped_count = 0
+        total_amount_disbursed = Decimal('0.00')
+
+        for loan_id in loan_ids:
+            loan = loan_map.get(loan_id)
+
+            if not loan:
+                results.append({
+                    'loan_id': loan_id,
+                    'application_number': None,
+                    'status': 'failed',
+                    'error_code': 'LOAN_NOT_FOUND',
+                    'error_message': 'Loan application not found'
+                })
+                failed_count += 1
+                continue
+
+            try:
+                result = self._process_single_loan(
+                    loan=loan,
+                    disbursement_date=disbursement_date,
+                    reference_prefix=reference_prefix,
+                    auto_approve=auto_approve,
+                    admin=request.user,
+                    request=request
+                )
+                results.append(result)
+
+                if result['status'] == 'success':
+                    successful_count += 1
+                    total_amount_disbursed += loan.principal_amount
+                elif result['status'] == 'skipped':
+                    skipped_count += 1
+                else:
+                    failed_count += 1
+
+            except Exception as e:
+                logger.error(f'Error processing loan {loan_id}: {str(e)}', exc_info=True)
+                results.append({
+                    'loan_id': loan_id,
+                    'application_number': loan.application_number,
+                    'status': 'failed',
+                    'error_code': 'PROCESSING_ERROR',
+                    'error_message': str(e)
+                })
+                failed_count += 1
+
+        # 5. Build response
+        response_data = {
+            'processed_count': len(loan_ids),
+            'successful_count': successful_count,
+            'failed_count': failed_count,
+            'skipped_count': skipped_count,
+            'total_amount_disbursed': float(total_amount_disbursed),
+            'results': results,
+            'idempotency_key': idempotency_key
+        }
+
+        # 6. Store idempotency log
+        request_hash = hashlib.sha256(
+            json.dumps(request.data, sort_keys=True, default=str).encode()
+        ).hexdigest()
+
+        IdempotencyLog.objects.create(
+            idempotency_key=idempotency_key,
+            endpoint='/api/v1/loans/admin/bulk-disburse/',
+            request_hash=request_hash,
+            response_status=200,
+            response_body=response_data,
+            admin=request.user,
+            expires_at=timezone.now() + timezone.timedelta(hours=24)
+        )
+
+        # 7. Log bulk operation
+        AuditLog.log(
+            action=f'Bulk disbursement: {successful_count} successful, {failed_count} failed, {skipped_count} skipped',
+            actor=request.user,
+            target_type='BulkDisbursement',
+            target_id=None,
+            metadata={
+                'loan_ids': loan_ids,
+                'successful_count': successful_count,
+                'failed_count': failed_count,
+                'skipped_count': skipped_count,
+                'total_amount': str(total_amount_disbursed),
+                'idempotency_key': idempotency_key
+            },
+            ip_address=get_client_ip(request)
+        )
+
+        logger.info(
+            f'Bulk disbursement completed by {request.user.get_full_name()}: '
+            f'{successful_count} success, {failed_count} failed, {skipped_count} skipped'
+        )
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+    def _process_single_loan(self, loan, disbursement_date, reference_prefix,
+                              auto_approve, admin, request):
+        """
+        Process a single loan for approval and disbursement.
+
+        Returns a result dict with status and details.
+        """
+        from django.db import transaction
+
+        # Check if already disbursed
+        if loan.status == LoanApplication.Status.DISBURSED:
+            return {
+                'loan_id': str(loan.id),
+                'application_number': loan.application_number,
+                'status': 'skipped',
+                'loan_status_after': loan.status,
+                'error_code': 'ALREADY_DISBURSED',
+                'error_message': 'Loan already disbursed'
+            }
+
+        with transaction.atomic():
+            # Refresh from database with lock
+            loan = LoanApplication.objects.select_for_update().get(pk=loan.pk)
+
+            # Approve if needed
+            eligible_for_approval = [
+                LoanApplication.Status.SUBMITTED,
+            ]
+
+            if loan.status in eligible_for_approval and auto_approve:
+                loan.status = LoanApplication.Status.APPROVED
+                loan.save(update_fields=['status', 'updated_at'])
+
+                # Create status history for approval
+                LoanStatusHistory.objects.create(
+                    application=loan,
+                    status=loan.status,
+                    actor=admin,
+                    comment='Auto-approved during bulk disbursement'
+                )
+
+                logger.info(f'Auto-approved loan {loan.application_number} during bulk disbursement')
+
+            elif loan.status != LoanApplication.Status.APPROVED:
+                return {
+                    'loan_id': str(loan.id),
+                    'application_number': loan.application_number,
+                    'status': 'failed',
+                    'loan_status_after': loan.status,
+                    'error_code': 'INVALID_STATUS',
+                    'error_message': f'Cannot disburse loan in status: {loan.status}'
+                }
+
+            # Validate disbursement details
+            validation_error = self._validate_disbursement_details(loan)
+            if validation_error:
+                return {
+                    'loan_id': str(loan.id),
+                    'application_number': loan.application_number,
+                    'status': 'failed',
+                    'loan_status_after': loan.status,
+                    'error_code': 'MISSING_DETAILS',
+                    'error_message': validation_error
+                }
+
+            # Generate disbursement reference
+            disbursement_reference = f'{reference_prefix}-{loan.application_number}'
+
+            # Get disbursement method
+            disbursement_method = loan.disbursement_method or 'mpesa'
+
+            # Calculate first deduction date
+            first_deduction = calculate_first_deduction_date(disbursement_date)
+
+            # Update loan
+            loan.status = LoanApplication.Status.DISBURSED
+            loan.disbursement_date = disbursement_date
+            loan.first_deduction_date = first_deduction
+            loan.disbursement_reference = disbursement_reference
+            if not loan.disbursement_method:
+                loan.disbursement_method = disbursement_method
+            loan.save()
+
+            # Generate repayment schedule
+            generate_repayment_schedule(loan)
+
+            # Create status history for disbursement
+            LoanStatusHistory.objects.create(
+                application=loan,
+                status=loan.status,
+                actor=admin,
+                comment=f'Bulk disbursement via {disbursement_method}. Reference: {disbursement_reference}'
+            )
+
+            # Notify employee (async)
+            try:
+                from apps.notifications.tasks import notify_disbursement
+                notify_disbursement.delay(str(loan.id))
+            except Exception as e:
+                logger.warning(f'Failed to queue disbursement notification for {loan.id}: {e}')
+
+            # Log individual disbursement
+            AuditLog.log(
+                action=f'Loan disbursed (bulk): {loan.application_number}',
+                actor=admin,
+                target_type='LoanApplication',
+                target_id=loan.id,
+                metadata={
+                    'amount': str(loan.principal_amount),
+                    'method': disbursement_method,
+                    'reference': disbursement_reference,
+                    'first_deduction': first_deduction.isoformat(),
+                    'bulk_operation': True
+                },
+                ip_address=get_client_ip(request)
+            )
+
+            # Send email notification
+            if loan.employee.email:
+                try:
+                    subject = 'Loan Disbursed - 254 Capital'
+                    body_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <style>
+                            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                            .header {{ background-color: #27ae60; color: white; padding: 20px; text-align: center; }}
+                            .content {{ padding: 20px; background-color: #f9f9f9; }}
+                            .info-box {{ background-color: #e8f5e9; border-left: 4px solid #27ae60; padding: 15px; margin: 15px 0; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <div class="header">
+                                <h1>Loan Disbursed!</h1>
+                            </div>
+                            <div class="content">
+                                <h2>Hello {loan.employee.get_full_name()},</h2>
+                                <p>Your loan has been successfully disbursed!</p>
+                                <div class="info-box">
+                                    <p><strong>Disbursement Details:</strong></p>
+                                    <ul>
+                                        <li><strong>Application Number:</strong> {loan.application_number}</li>
+                                        <li><strong>Loan Amount:</strong> KES {loan.principal_amount:,.2f}</li>
+                                        <li><strong>Disbursement Date:</strong> {loan.disbursement_date.strftime('%d %B %Y')}</li>
+                                        <li><strong>Reference:</strong> {disbursement_reference}</li>
+                                    </ul>
+                                    <p><strong>Repayment Details:</strong></p>
+                                    <ul>
+                                        <li><strong>Monthly Deduction:</strong> KES {loan.monthly_deduction:,.2f}</li>
+                                        <li><strong>First Deduction Date:</strong> {loan.first_deduction_date.strftime('%d %B %Y')}</li>
+                                        <li><strong>Repayment Period:</strong> {loan.repayment_months} months</li>
+                                    </ul>
+                                </div>
+                                <p>Thank you for choosing 254 Capital!</p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                    send_email(loan.employee.email, subject, body_html, cc_address='david.muema@254-capital.com')
+                except Exception as e:
+                    logger.error(f'Failed to send disbursement email for {loan.id}: {e}')
+
+            return {
+                'loan_id': str(loan.id),
+                'application_number': loan.application_number,
+                'status': 'success',
+                'loan_status_after': 'disbursed',
+                'disbursement_status': 'initiated',
+                'disbursement_reference': disbursement_reference
+            }
+
+    def _validate_disbursement_details(self, loan):
+        """
+        Validate disbursement details for the loan.
+
+        Returns error message if validation fails, None if valid.
+        """
+        method = loan.disbursement_method or 'mpesa'
+
+        if method == 'bank':
+            # Check bank details from employee profile
+            if hasattr(loan.employee, 'employee_profile'):
+                profile = loan.employee.employee_profile
+                if not profile.bank_name:
+                    return 'Bank name is required for bank transfer'
+                if not profile.bank_account_number:
+                    return 'Bank account number is required for bank transfer'
+            else:
+                return 'Employee profile with bank details is required'
+
+        elif method == 'mpesa':
+            # Check M-Pesa number
+            phone = None
+            if hasattr(loan.employee, 'employee_profile'):
+                phone = loan.employee.employee_profile.mpesa_number
+            if not phone:
+                phone = loan.employee.phone_number
+            if not phone:
+                return 'M-Pesa phone number is required'
+
+        return None
 
 
 class LoanSearchView(APIView):

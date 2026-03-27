@@ -375,3 +375,64 @@ class ManualPayment(models.Model):
 
     def __str__(self):
         return f"Payment KES {self.amount_received:,.2f} for {self.loan.application_number}"
+
+
+class IdempotencyLog(models.Model):
+    """
+    Model for tracking idempotency keys to prevent duplicate processing.
+
+    Used for bulk operations to ensure that retried requests don't cause
+    duplicate disbursements or approvals.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    idempotency_key = models.CharField(
+        max_length=100,
+        unique=True,
+        db_index=True,
+        help_text='Unique key provided by client to ensure idempotency'
+    )
+    endpoint = models.CharField(
+        max_length=255,
+        help_text='API endpoint that was called'
+    )
+    request_hash = models.CharField(
+        max_length=64,
+        help_text='SHA256 hash of request body for verification'
+    )
+    response_status = models.IntegerField(
+        help_text='HTTP status code of the response'
+    )
+    response_body = models.JSONField(
+        help_text='JSON response body'
+    )
+    admin = models.ForeignKey(
+        'accounts.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='idempotency_logs',
+        help_text='Admin who made the request'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField(
+        help_text='When this idempotency record expires'
+    )
+
+    class Meta:
+        db_table = 'idempotency_logs'
+        ordering = ['-created_at']
+        verbose_name = 'Idempotency Log'
+        verbose_name_plural = 'Idempotency Logs'
+        indexes = [
+            models.Index(fields=['idempotency_key']),
+            models.Index(fields=['expires_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.idempotency_key} - {self.endpoint}'
+
+    @property
+    def is_expired(self):
+        """Check if this idempotency record has expired."""
+        from django.utils import timezone
+        return self.expires_at < timezone.now()
