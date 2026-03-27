@@ -1145,10 +1145,14 @@ class AdminDisbursementView(APIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Check status
+        # Refresh from database to ensure we have the latest status
+        # This prevents race conditions when approval and disbursement happen sequentially
+        app.refresh_from_db()
+
+        # Check status - only approved applications can be disbursed
         if app.status != LoanApplication.Status.APPROVED:
             return Response(
-                {'detail': 'Only approved applications can be disbursed.'},
+                {'detail': f'Only approved applications can be disbursed. Current status: {app.status}'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
