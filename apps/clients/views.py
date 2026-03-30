@@ -212,7 +212,7 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
                             row.get('Email') or
                             row.get('email', '')
                         ),
-                        'employer_id': employer_id,
+                        'employer': employer_id,
                         'employee_id': (
                             row.get('Employee ID') or
                             row.get('employee_id', '')
@@ -388,7 +388,7 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
                             row.get('Email') or
                             row.get('email', '')
                         ),
-                        'employer_id': employer_id,
+                        'employer': employer_id,
                         'employee_id': (
                             row.get('Employee ID') or
                             row.get('employee_id', '')
