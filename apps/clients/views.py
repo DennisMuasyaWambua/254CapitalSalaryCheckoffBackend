@@ -1056,5 +1056,37 @@ def download_client_template(request):
         content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
     response['Content-Disposition'] = 'attachment; filename=client_upload_template.xlsx'
-    
+
     return response
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def validate_bulk_upload(request):
+    """
+    Standalone view to validate bulk upload file without importing.
+
+    POST /api/v1/clients/validate/
+    """
+    # Use the viewset's validate_upload method
+    viewset = ExistingClientViewSet()
+    viewset.request = request
+    viewset.format_kwarg = None
+
+    return viewset.validate_upload(request)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bulk_upload_clients(request):
+    """
+    Standalone view to bulk upload client records.
+
+    POST /api/v1/clients/bulk-upload/
+    """
+    # Use the viewset's bulk_upload method
+    viewset = ExistingClientViewSet()
+    viewset.request = request
+    viewset.format_kwarg = None
+
+    return viewset.bulk_upload(request)

@@ -13,8 +13,11 @@ router = DefaultRouter()
 router.register(r'', views.ExistingClientViewSet, basename='existing-clients')
 
 urlpatterns = [
-    # Standalone template download (no auth required)
+    # Standalone endpoints (MUST be before router.urls to avoid 405 errors)
     path('template-download/', views.download_client_template, name='template-download'),
+    path('validate/', views.validate_bulk_upload, name='validate-bulk'),
+    path('bulk-upload/', views.bulk_upload_clients, name='bulk-upload'),
+
     # Viewset routes
     path('', include(router.urls)),
 ]
