@@ -1090,3 +1090,168 @@ def bulk_upload_clients(request):
     viewset.format_kwarg = None
 
     return viewset.bulk_upload(request)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def generate_collection_report(request):
+    """
+    Generate monthly collection/deduction report in Excel format.
+
+    GET /api/v1/clients/collection-report/
+
+    Query Parameters:
+    - employer_id: UUID of employer (required for admin, auto-set for HR)
+    - month: Month number (1-12), defaults to current month
+    - year: Year (YYYY), defaults to current year
+
+    Response: Excel file download
+    """
+    from apps.employers.models import Employer
+    from datetime import datetime
+    from calendar import month_name
+
+    # Get query parameters
+    employer_id = request.GET.get('employer_id')
+    month = request.GET.get('month', datetime.now().month)
+    year = request.GET.get('year', datetime.now().year)
+
+    try:
+        month = int(month)
+        year = int(year)
+    except (ValueError, TypeError):
+        return Response(
+            {'error': 'Invalid month or year parameter'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # Permission check and employer filter
+    if request.user.role == 'hr':
+        # HR users can only see their own employer
+        if not request.user.employer:
+            return Response(
+                {'error': 'HR user not associated with an employer'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        employer = request.user.employer
+    elif request.user.role == 'admin':
+        # Admin must specify employer
+        if not employer_id:
+            return Response(
+                {'error': 'employer_id parameter is required for admin users'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            employer = Employer.objects.get(id=employer_id, is_active=True)
+        except Employer.DoesNotExist:
+            return Response(
+                {'error': 'Employer not found or inactive'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+    else:
+        return Response(
+            {'error': 'Permission denied'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    # Get all approved clients for this employer with active loans
+    clients = ExistingClient.objects.filter(
+        employer=employer,
+        approval_status='approved',
+        loan_status='Active',
+        outstanding_balance__gt=0
+    ).order_by('full_name')
+
+    if not clients.exists():
+        return Response(
+            {'error': 'No active clients found for this employer'},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    # Generate Excel file
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Deductions"
+
+    # Month name for title
+    month_str = month_name[month]
+    title = f"{month_str} {year} -Deductions"
+
+    # Row 1: Title (merged across columns)
+    ws.merge_cells('B1:D1')
+    title_cell = ws['B1']
+    title_cell.value = title
+    title_cell.font = Font(bold=True, size=14)
+    title_cell.alignment = Alignment(horizontal='center', vertical='center')
+
+    # Row 2: Headers
+    headers = ['Name', 'Amount Borrowed', 'Installment Due']
+    header_font = Font(bold=True, size=11)
+    header_alignment = Alignment(horizontal='center', vertical='center')
+
+    for col_idx, header in enumerate(headers, start=2):  # Start at column B
+        cell = ws.cell(row=2, column=col_idx, value=header)
+        cell.font = header_font
+        cell.alignment = header_alignment
+
+    # Set column widths
+    ws.column_dimensions['A'].width = 5   # Serial number
+    ws.column_dimensions['B'].width = 30  # Name
+    ws.column_dimensions['C'].width = 18  # Amount Borrowed
+    ws.column_dimensions['D'].width = 18  # Installment Due
+
+    # Data rows
+    total_borrowed = Decimal('0')
+    total_installment = Decimal('0')
+
+    for idx, client in enumerate(clients, start=1):
+        row_num = idx + 2  # Start from row 3 (after title and headers)
+
+        # Serial number
+        ws.cell(row=row_num, column=1, value=idx)
+
+        # Name
+        ws.cell(row=row_num, column=2, value=client.full_name)
+
+        # Amount Borrowed (loan_amount)
+        ws.cell(row=row_num, column=3, value=float(client.loan_amount))
+
+        # Installment Due (monthly_deduction)
+        ws.cell(row=row_num, column=4, value=float(client.monthly_deduction))
+
+        # Add to totals
+        total_borrowed += client.loan_amount
+        total_installment += client.monthly_deduction
+
+    # Totals row
+    total_row = len(clients) + 3
+    ws.cell(row=total_row, column=3, value=float(total_borrowed))
+    ws.cell(row=total_row, column=4, value=float(total_installment))
+
+    # Format totals row
+    for col in [3, 4]:
+        cell = ws.cell(row=total_row, column=col)
+        cell.font = Font(bold=True)
+
+    # Format currency columns
+    for row in range(3, total_row + 1):
+        for col in [3, 4]:  # Amount Borrowed and Installment Due
+            cell = ws.cell(row=row, column=col)
+            cell.number_format = '#,##0'
+
+    # Save to BytesIO
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    # Create response
+    filename = f"{employer.name}_{month_str}_{year}_Deductions.xlsx"
+    filename = filename.replace(' ', '_')
+
+    response = HttpResponse(
+        output.read(),
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    return response
