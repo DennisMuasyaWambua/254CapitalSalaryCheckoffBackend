@@ -550,7 +550,7 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
             [
                 'John Kamau',
                 '12345678',
-                '0712345678',
+                '254712345678',
                 'john@example.com',
                 'Safaricom PLC',  # Use employer name instead of ID
                 'EMP-1234',
@@ -566,7 +566,7 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
             [
                 'Jane Wanjiku',
                 '87654321',
-                '0723456789',
+                '254723456789',
                 'jane@example.com',
                 'Kenya Power',
                 'EMP-5678',
@@ -966,7 +966,7 @@ def download_client_template(request):
         [
             'John Kamau',
             '12345678',
-            '0712345678',
+            '254712345678',
             'john@example.com',
             'Safaricom PLC',
             'EMP-1234',
@@ -982,7 +982,7 @@ def download_client_template(request):
         [
             'Jane Wanjiku',
             '87654321',
-            '0723456789',
+            '254723456789',
             'jane@example.com',
             'Kenya Power',
             'EMP-5678',

@@ -72,15 +72,29 @@ class ExistingClientSerializer(serializers.ModelSerializer):
         return value
 
     def validate_mobile(self, value):
-        """Validate mobile number format."""
+        """Validate and normalize mobile number format."""
         # Remove any spaces or dashes
-        cleaned = value.replace(' ', '').replace('-', '')
+        cleaned = value.replace(' ', '').replace('-', '').replace('+', '')
 
-        # Check if it's a valid Kenyan mobile number
-        if not cleaned.startswith('0') and not cleaned.startswith('+254') and not cleaned.startswith('254'):
+        # Strip leading zeros
+        cleaned = cleaned.lstrip('0')
+
+        # If it starts with 7 or 1 (Kenyan mobile prefixes), add 254
+        if cleaned.startswith('7') or cleaned.startswith('1'):
+            cleaned = '254' + cleaned
+        # If it already starts with 254, keep it
+        elif not cleaned.startswith('254'):
             raise serializers.ValidationError("Mobile number must be a valid Kenyan number.")
 
-        return value
+        # Validate length (254 + 9 digits = 12 digits total)
+        if len(cleaned) != 12:
+            raise serializers.ValidationError("Mobile number must be in format 254XXXXXXXXX (12 digits).")
+
+        # Validate all digits
+        if not cleaned.isdigit():
+            raise serializers.ValidationError("Mobile number must contain only digits.")
+
+        return cleaned
 
     def validate_repayment_period(self, value):
         """Validate repayment period."""
