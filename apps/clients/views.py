@@ -13,6 +13,7 @@ import pandas as pd
 from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
+from decimal import Decimal
 import logging
 
 from .models import ExistingClient
@@ -1107,151 +1108,364 @@ def generate_collection_report(request):
 
     Response: Excel file download
     """
-    from apps.employers.models import Employer
-    from datetime import datetime
-    from calendar import month_name
-
-    # Get query parameters
-    employer_id = request.GET.get('employer_id')
-    month = request.GET.get('month', datetime.now().month)
-    year = request.GET.get('year', datetime.now().year)
-
     try:
-        month = int(month)
-        year = int(year)
-    except (ValueError, TypeError):
-        return Response(
-            {'error': 'Invalid month or year parameter'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        from apps.employers.models import Employer
+        from datetime import datetime
+        from calendar import month_name
 
-    # Permission check and employer filter
-    if request.user.role == 'hr':
-        # HR users can only see their own employer
-        if not request.user.employer:
-            return Response(
-                {'error': 'HR user not associated with an employer'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        employer = request.user.employer
-    elif request.user.role == 'admin':
-        # Admin must specify employer
-        if not employer_id:
-            return Response(
-                {'error': 'employer_id parameter is required for admin users'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        logger.info(f'Collection report requested by user {request.user.id} ({request.user.role})')
+        logger.info(f'Query params: {request.GET.dict()}')
+
+        # Get query parameters
+        employer_id = request.GET.get('employer_id')
+        month = request.GET.get('month', datetime.now().month)
+        year = request.GET.get('year', datetime.now().year)
+
         try:
-            employer = Employer.objects.get(id=employer_id, is_active=True)
-        except Employer.DoesNotExist:
+            month = int(month)
+            year = int(year)
+        except (ValueError, TypeError):
+            logger.error(f'Invalid month or year: month={month}, year={year}')
             return Response(
-                {'error': 'Employer not found or inactive'},
+                {'error': 'Invalid month or year parameter'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Permission check and employer filter
+        if request.user.role == 'hr':
+            # HR users can only see their own employer
+            if not request.user.employer:
+                logger.error(f'HR user {request.user.id} not associated with employer')
+                return Response(
+                    {'error': 'HR user not associated with an employer'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            employer = request.user.employer
+            logger.info(f'HR user accessing report for employer: {employer.name} ({employer.id})')
+        elif request.user.role == 'admin':
+            # Admin must specify employer
+            if not employer_id:
+                logger.error('Admin user did not provide employer_id')
+                return Response(
+                    {'error': 'employer_id parameter is required for admin users'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                employer = Employer.objects.get(id=employer_id, is_active=True)
+                logger.info(f'Admin user accessing report for employer: {employer.name} ({employer.id})')
+            except Employer.DoesNotExist:
+                logger.error(f'Employer not found: {employer_id}')
+                return Response(
+                    {'error': 'Employer not found or inactive'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            logger.error(f'User with role {request.user.role} attempted to access collection report')
+            return Response(
+                {'error': 'Permission denied'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Get all approved clients for this employer with active loans
+        logger.info(f'Fetching existing clients for employer {employer.id}')
+        existing_clients = ExistingClient.objects.filter(
+            employer=employer,
+            approval_status='approved',
+            loan_status='Active',
+            outstanding_balance__gt=0
+        ).order_by('full_name')
+        logger.info(f'Found {existing_clients.count()} existing clients')
+
+        # Also get new loan applications that are disbursed (active)
+        from apps.loans.models import LoanApplication
+        logger.info(f'Fetching new loan applications for employer {employer.id}')
+        new_loans = LoanApplication.objects.filter(
+            employer=employer,
+            status='disbursed'  # Changed from LoanApplication.Status.DISBURSED to string
+        ).select_related('employee').order_by('employee__first_name', 'employee__last_name')
+        logger.info(f'Found {new_loans.count()} new loans')
+
+        # Create unified list of deductions with normalized data structure
+        deduction_list = []
+
+        # Add existing clients
+        for client in existing_clients:
+            deduction_list.append({
+                'name': client.full_name,
+                'loan_amount': client.loan_amount,
+                'monthly_deduction': client.monthly_deduction,
+                'outstanding_balance': client.outstanding_balance
+            })
+
+        # Add new loan applications
+        for loan in new_loans:
+            # Only include if there's outstanding balance
+            if loan.outstanding_balance > 0:
+                employee_name = loan.employee.get_full_name() if loan.employee else 'N/A'
+                deduction_list.append({
+                    'name': employee_name,
+                    'loan_amount': loan.principal_amount,
+                    'monthly_deduction': loan.monthly_deduction,
+                    'outstanding_balance': loan.outstanding_balance
+                })
+
+        # Sort by name
+        deduction_list.sort(key=lambda x: x['name'])
+        logger.info(f'Total deductions to include in report: {len(deduction_list)}')
+
+        if not deduction_list:
+            logger.warning(f'No active clients found for employer {employer.id}')
+            return Response(
+                {'error': 'No active clients found for this employer'},
                 status=status.HTTP_404_NOT_FOUND
             )
-    else:
-        return Response(
-            {'error': 'Permission denied'},
-            status=status.HTTP_403_FORBIDDEN
+
+        # Generate Excel file
+        logger.info('Generating Excel file')
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Deductions"
+
+        # Month name for title
+        month_str = month_name[month]
+        title = f"{month_str} {year} -Deductions"
+
+        # Row 1: Title (merged across columns)
+        ws.merge_cells('B1:D1')
+        title_cell = ws['B1']
+        title_cell.value = title
+        title_cell.font = Font(bold=True, size=14)
+        title_cell.alignment = Alignment(horizontal='center', vertical='center')
+
+        # Row 2: Headers
+        headers = ['Name', 'Amount Borrowed', 'Installment Due']
+        header_font = Font(bold=True, size=11)
+        header_alignment = Alignment(horizontal='center', vertical='center')
+
+        for col_idx, header in enumerate(headers, start=2):  # Start at column B
+            cell = ws.cell(row=2, column=col_idx, value=header)
+            cell.font = header_font
+            cell.alignment = header_alignment
+
+        # Set column widths
+        ws.column_dimensions['A'].width = 5   # Serial number
+        ws.column_dimensions['B'].width = 30  # Name
+        ws.column_dimensions['C'].width = 18  # Amount Borrowed
+        ws.column_dimensions['D'].width = 18  # Installment Due
+
+        # Data rows
+        total_borrowed = Decimal('0')
+        total_installment = Decimal('0')
+
+        for idx, deduction in enumerate(deduction_list, start=1):
+            row_num = idx + 2  # Start from row 3 (after title and headers)
+
+            # Serial number
+            ws.cell(row=row_num, column=1, value=idx)
+
+            # Name
+            ws.cell(row=row_num, column=2, value=deduction['name'])
+
+            # Amount Borrowed (loan_amount)
+            ws.cell(row=row_num, column=3, value=float(deduction['loan_amount']))
+
+            # Installment Due (monthly_deduction)
+            ws.cell(row=row_num, column=4, value=float(deduction['monthly_deduction']))
+
+            # Add to totals
+            total_borrowed += Decimal(str(deduction['loan_amount']))
+            total_installment += Decimal(str(deduction['monthly_deduction']))
+
+        # Totals row
+        total_row = len(deduction_list) + 3
+        ws.cell(row=total_row, column=3, value=float(total_borrowed))
+        ws.cell(row=total_row, column=4, value=float(total_installment))
+
+        # Format totals row
+        for col in [3, 4]:
+            cell = ws.cell(row=total_row, column=col)
+            cell.font = Font(bold=True)
+
+        # Format currency columns
+        for row in range(3, total_row + 1):
+            for col in [3, 4]:  # Amount Borrowed and Installment Due
+                cell = ws.cell(row=row, column=col)
+                cell.number_format = '#,##0'
+
+        # Save to BytesIO
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        # Create response
+        filename = f"{employer.name}_{month_str}_{year}_Deductions.xlsx"
+        filename = filename.replace(' ', '_')
+
+        logger.info(f'Successfully generated collection report: {filename}')
+
+        response = HttpResponse(
+            output.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
 
-    # Get all approved clients for this employer with active loans
-    clients = ExistingClient.objects.filter(
-        employer=employer,
-        approval_status='approved',
-        loan_status='Active',
-        outstanding_balance__gt=0
-    ).order_by('full_name')
+        return response
 
-    if not clients.exists():
+    except Exception as e:
+        logger.error(f'Error generating collection report: {str(e)}', exc_info=True)
         return Response(
-            {'error': 'No active clients found for this employer'},
-            status=status.HTTP_404_NOT_FOUND
+            {
+                'detail': 'An unexpected error occurred. Please try again later.',
+                'code': 'server_error'
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_collection_report_data(request):
+    """
+    Get collection report data as JSON for preview.
 
-    # Generate Excel file
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Deductions"
+    GET /api/v1/clients/collection-report-data/
 
-    # Month name for title
-    month_str = month_name[month]
-    title = f"{month_str} {year} -Deductions"
+    Query Parameters:
+    - employer_id: UUID of employer (required for admin, auto-set for HR)
+    - month: Month number (1-12), defaults to current month
+    - year: Year (YYYY), defaults to current year
 
-    # Row 1: Title (merged across columns)
-    ws.merge_cells('B1:D1')
-    title_cell = ws['B1']
-    title_cell.value = title
-    title_cell.font = Font(bold=True, size=14)
-    title_cell.alignment = Alignment(horizontal='center', vertical='center')
+    Response: JSON with report data
+    """
+    try:
+        from apps.employers.models import Employer
+        from datetime import datetime
+        from calendar import month_name
 
-    # Row 2: Headers
-    headers = ['Name', 'Amount Borrowed', 'Installment Due']
-    header_font = Font(bold=True, size=11)
-    header_alignment = Alignment(horizontal='center', vertical='center')
+        logger.info(f'Collection report data requested by user {request.user.id} ({request.user.role})')
+        logger.info(f'Query params: {request.GET.dict()}')
 
-    for col_idx, header in enumerate(headers, start=2):  # Start at column B
-        cell = ws.cell(row=2, column=col_idx, value=header)
-        cell.font = header_font
-        cell.alignment = header_alignment
+        # Get query parameters
+        employer_id = request.GET.get('employer_id')
+        month = request.GET.get('month', datetime.now().month)
+        year = request.GET.get('year', datetime.now().year)
 
-    # Set column widths
-    ws.column_dimensions['A'].width = 5   # Serial number
-    ws.column_dimensions['B'].width = 30  # Name
-    ws.column_dimensions['C'].width = 18  # Amount Borrowed
-    ws.column_dimensions['D'].width = 18  # Installment Due
+        try:
+            month = int(month)
+            year = int(year)
+        except (ValueError, TypeError):
+            logger.error(f'Invalid month or year: month={month}, year={year}')
+            return Response(
+                {'error': 'Invalid month or year parameter'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-    # Data rows
-    total_borrowed = Decimal('0')
-    total_installment = Decimal('0')
+        # Permission check and employer filter
+        if request.user.role == 'hr':
+            if not request.user.employer:
+                logger.error(f'HR user {request.user.id} not associated with employer')
+                return Response(
+                    {'error': 'HR user not associated with an employer'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            employer = request.user.employer
+            logger.info(f'HR user accessing report data for employer: {employer.name} ({employer.id})')
+        elif request.user.role == 'admin':
+            if not employer_id:
+                logger.error('Admin user did not provide employer_id')
+                return Response(
+                    {'error': 'employer_id parameter is required for admin users'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                employer = Employer.objects.get(id=employer_id, is_active=True)
+                logger.info(f'Admin user accessing report data for employer: {employer.name} ({employer.id})')
+            except Employer.DoesNotExist:
+                logger.error(f'Employer not found: {employer_id}')
+                return Response(
+                    {'error': 'Employer not found or inactive'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        else:
+            logger.error(f'User with role {request.user.role} attempted to access collection report data')
+            return Response(
+                {'error': 'Permission denied'},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
-    for idx, client in enumerate(clients, start=1):
-        row_num = idx + 2  # Start from row 3 (after title and headers)
+        # Get all approved clients for this employer with active loans
+        logger.info(f'Fetching existing clients for employer {employer.id}')
+        existing_clients = ExistingClient.objects.filter(
+            employer=employer,
+            approval_status='approved',
+            loan_status='Active',
+            outstanding_balance__gt=0
+        ).order_by('full_name')
+        logger.info(f'Found {existing_clients.count()} existing clients')
 
-        # Serial number
-        ws.cell(row=row_num, column=1, value=idx)
+        # Also get new loan applications that are disbursed (active)
+        from apps.loans.models import LoanApplication
+        logger.info(f'Fetching new loan applications for employer {employer.id}')
+        new_loans = LoanApplication.objects.filter(
+            employer=employer,
+            status='disbursed'
+        ).select_related('employee').order_by('employee__first_name', 'employee__last_name')
+        logger.info(f'Found {new_loans.count()} new loans')
 
-        # Name
-        ws.cell(row=row_num, column=2, value=client.full_name)
+        # Create unified list of deductions
+        deduction_list = []
 
-        # Amount Borrowed (loan_amount)
-        ws.cell(row=row_num, column=3, value=float(client.loan_amount))
+        # Add existing clients
+        for client in existing_clients:
+            deduction_list.append({
+                'id': str(client.id),
+                'full_name': client.full_name,
+                'loan_amount': str(client.loan_amount),
+                'monthly_deduction': str(client.monthly_deduction),
+                'outstanding_balance': str(client.outstanding_balance)
+            })
 
-        # Installment Due (monthly_deduction)
-        ws.cell(row=row_num, column=4, value=float(client.monthly_deduction))
+        # Add new loan applications
+        for loan in new_loans:
+            if loan.outstanding_balance > 0:
+                employee_name = loan.employee.get_full_name() if loan.employee else 'N/A'
+                deduction_list.append({
+                    'id': str(loan.id),
+                    'full_name': employee_name,
+                    'loan_amount': str(loan.principal_amount),
+                    'monthly_deduction': str(loan.monthly_deduction),
+                    'outstanding_balance': str(loan.outstanding_balance)
+                })
 
-        # Add to totals
-        total_borrowed += client.loan_amount
-        total_installment += client.monthly_deduction
+        # Sort by name
+        deduction_list.sort(key=lambda x: x['full_name'])
+        logger.info(f'Total deductions to include in report data: {len(deduction_list)}')
 
-    # Totals row
-    total_row = len(clients) + 3
-    ws.cell(row=total_row, column=3, value=float(total_borrowed))
-    ws.cell(row=total_row, column=4, value=float(total_installment))
+        if not deduction_list:
+            logger.warning(f'No active clients found for employer {employer.id}')
+            return Response(
+                {'error': 'No active clients found for this employer'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-    # Format totals row
-    for col in [3, 4]:
-        cell = ws.cell(row=total_row, column=col)
-        cell.font = Font(bold=True)
+        # Calculate totals
+        total_amount_borrowed = sum(Decimal(item['loan_amount']) for item in deduction_list)
+        total_installment_due = sum(Decimal(item['monthly_deduction']) for item in deduction_list)
 
-    # Format currency columns
-    for row in range(3, total_row + 1):
-        for col in [3, 4]:  # Amount Borrowed and Installment Due
-            cell = ws.cell(row=row, column=col)
-            cell.number_format = '#,##0'
+        logger.info(f'Successfully generated collection report data')
 
-    # Save to BytesIO
-    output = BytesIO()
-    wb.save(output)
-    output.seek(0)
+        return Response({
+            'employer_name': employer.name,
+            'period': f'{month_name[month]} {year}',
+            'items': deduction_list,
+            'total_amount_borrowed': str(total_amount_borrowed),
+            'total_installment_due': str(total_installment_due)
+        })
 
-    # Create response
-    filename = f"{employer.name}_{month_str}_{year}_Deductions.xlsx"
-    filename = filename.replace(' ', '_')
-
-    response = HttpResponse(
-        output.read(),
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )
-    response['Content-Disposition'] = f'attachment; filename="{filename}"'
-
-    return response
+    except Exception as e:
+        logger.error(f'Error generating collection report data: {str(e)}', exc_info=True)
+        return Response(
+            {
+                'detail': 'An unexpected error occurred. Please try again later.',
+                'code': 'server_error'
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

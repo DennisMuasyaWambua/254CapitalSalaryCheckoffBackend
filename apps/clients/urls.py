@@ -18,6 +18,7 @@ urlpatterns = [
     path('validate/', views.validate_bulk_upload, name='validate-bulk'),
     path('bulk-upload/', views.bulk_upload_clients, name='bulk-upload'),
     path('collection-report/', views.generate_collection_report, name='collection-report'),
+    path('collection-report-data/', views.get_collection_report_data, name='collection-report-data'),
 
     # Viewset routes
     path('', include(router.urls)),
