@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15-alpine
@@ -35,7 +33,10 @@ services:
       retries: 3
 
   web:
-    image: ${DOCKER_IMAGE:-your-dockerhub-username/salary-checkoff-backend}:${DOCKER_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${DOCKER_IMAGE:-salary-checkoff-backend}:${DOCKER_TAG:-latest}
     container_name: salary_checkoff_web
     restart: always
     command: gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 --access-logfile - --error-logfile - config.wsgi:application
@@ -67,7 +68,10 @@ services:
       start_period: 40s
 
   celery_worker:
-    image: ${DOCKER_IMAGE:-your-dockerhub-username/salary-checkoff-backend}:${DOCKER_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${DOCKER_IMAGE:-salary-checkoff-backend}:${DOCKER_TAG:-latest}
     container_name: salary_checkoff_celery_worker
     restart: always
     command: celery -A config worker --loglevel=info --concurrency=4
@@ -90,7 +94,10 @@ services:
       - app_network
 
   celery_beat:
-    image: ${DOCKER_IMAGE:-your-dockerhub-username/salary-checkoff-backend}:${DOCKER_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${DOCKER_IMAGE:-salary-checkoff-backend}:${DOCKER_TAG:-latest}
     container_name: salary_checkoff_celery_beat
     restart: always
     command: celery -A config beat --loglevel=info --scheduler django_celery_beat.schedulers:DatabaseScheduler
