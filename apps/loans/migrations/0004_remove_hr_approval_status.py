@@ -1,5 +1,5 @@
 # Generated migration to remove HR approval statuses
-from django.db import migrations
+from django.db import migrations, models
 
 
 def migrate_hr_statuses(apps, schema_editor):
@@ -38,7 +38,7 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='loanapplication',
             name='status',
-            field=migrations.models.CharField(
+            field=models.CharField(
                 max_length=30,
                 choices=[
                     ('submitted', 'Submitted'),
