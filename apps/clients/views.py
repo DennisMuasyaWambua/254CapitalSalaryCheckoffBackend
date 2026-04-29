@@ -1456,7 +1456,9 @@ def get_collection_report_data(request):
                     'full_name': client.full_name,
                     'loan_amount': str(client.loan_amount),
                     'monthly_deduction': str(client.monthly_deduction),
-                    'outstanding_balance': str(client.outstanding_balance)
+                    'outstanding_balance': str(client.outstanding_balance),
+                    'disbursement_date': client.disbursement_date.isoformat() if client.disbursement_date else None,
+                    'repayment_period': client.repayment_period
                 })
                 logger.debug(f'Including client {client.full_name}')
             else:
@@ -1478,7 +1480,9 @@ def get_collection_report_data(request):
                         'full_name': employee_name,
                         'loan_amount': str(loan.principal_amount),
                         'monthly_deduction': str(loan.monthly_deduction),
-                        'outstanding_balance': str(loan.outstanding_balance)
+                        'outstanding_balance': str(loan.outstanding_balance),
+                        'disbursement_date': loan.disbursement_date.isoformat() if loan.disbursement_date else None,
+                        'repayment_period': loan.repayment_months
                     })
                     logger.debug(f'Including loan {loan.application_number}')
                 else:
