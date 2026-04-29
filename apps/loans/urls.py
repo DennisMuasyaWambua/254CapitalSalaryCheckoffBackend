@@ -4,6 +4,7 @@ URL routing for loan management endpoints.
 
 from django.urls import path
 from . import views
+from . import crud_views
 
 app_name = 'loans'
 
@@ -28,4 +29,15 @@ urlpatterns = [
 
     # Payment management endpoints
     path('search/', views.LoanSearchView.as_view(), name='loan-search'),
+
+    # Loan CRUD endpoints (Admin only)
+    path('<uuid:loan_id>/', crud_views.UpdateLoanView.as_view(), name='update-loan'),
+    path('<uuid:loan_id>/delete-check/', crud_views.DeleteLoanCheckView.as_view(), name='delete-check'),
+    path('<uuid:loan_id>/delete/', crud_views.DeleteLoanView.as_view(), name='delete-loan'),
+    path('<uuid:loan_id>/repayments/', crud_views.GetLoanRepaymentsView.as_view(), name='loan-repayments'),
+    path('<uuid:loan_id>/repayments/manual/', crud_views.ManualRepaymentView.as_view(), name='manual-repayment'),
+
+    # Repayment CRUD endpoints (Admin only)
+    path('repayments/<uuid:repayment_id>/', crud_views.UpdateRepaymentView.as_view(), name='update-repayment'),
+    path('repayments/<uuid:repayment_id>/delete/', crud_views.DeleteRepaymentView.as_view(), name='delete-repayment'),
 ]

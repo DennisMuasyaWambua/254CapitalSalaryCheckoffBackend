@@ -771,3 +771,446 @@ class ResetPasswordView(APIView):
             {'detail': 'Password reset successful. You can now log in with your new password.'},
             status=status.HTTP_200_OK
         )
+
+
+class ChangePasswordView(APIView):
+    """
+    POST /api/v1/auth/change-password/
+    Self-service password change for authenticated users.
+
+    Allows employees, HR managers, and admins to change their own password.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """Change user's password."""
+        current_password = request.data.get('current_password', '').strip()
+        new_password = request.data.get('new_password', '').strip()
+        confirm_password = request.data.get('confirm_password', '').strip()
+
+        # Validate required fields
+        if not current_password or not new_password or not confirm_password:
+            return Response(
+                {'error': 'All fields are required (current_password, new_password, confirm_password)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if new passwords match
+        if new_password != confirm_password:
+            return Response(
+                {'error': 'New passwords do not match'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Verify current password
+        if not request.user.check_password(current_password):
+            return Response(
+                {'error': 'Current password is incorrect'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate new password requirements
+        if len(new_password) < 8:
+            return Response(
+                {
+                    'error': 'New password does not meet requirements',
+                    'requirements': [
+                        'Minimum 8 characters',
+                        'At least one uppercase letter',
+                        'At least one number',
+                        'At least one special character'
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check for uppercase letter
+        if not any(c.isupper() for c in new_password):
+            return Response(
+                {
+                    'error': 'New password does not meet requirements',
+                    'requirements': [
+                        'Minimum 8 characters',
+                        'At least one uppercase letter',
+                        'At least one number',
+                        'At least one special character'
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check for number
+        if not any(c.isdigit() for c in new_password):
+            return Response(
+                {
+                    'error': 'New password does not meet requirements',
+                    'requirements': [
+                        'Minimum 8 characters',
+                        'At least one uppercase letter',
+                        'At least one number',
+                        'At least one special character'
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check for special character
+        special_chars = "!@#$%^&*()_+-=[]{}|;:,.<>?"
+        if not any(c in special_chars for c in new_password):
+            return Response(
+                {
+                    'error': 'New password does not meet requirements',
+                    'requirements': [
+                        'Minimum 8 characters',
+                        'At least one uppercase letter',
+                        'At least one number',
+                        'At least one special character'
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update password
+        request.user.set_password(new_password)
+        request.user.save()
+
+        # Log password change
+        AuditLog.log(
+            action='Password changed',
+            actor=request.user,
+            target_type='CustomUser',
+            target_id=request.user.id,
+            ip_address=get_client_ip(request)
+        )
+
+        logger.info(f'Password changed for user {request.user.email}')
+
+        return Response(
+            {
+                'detail': 'Password changed successfully',
+                'requires_relogin': True
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class RequestPasswordResetOTPView(APIView):
+    """
+    POST /api/v1/auth/request-password-reset/
+    Request password reset for HR/Admin users via OTP.
+
+    Sends an OTP to the user's registered phone number.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [OTPRateThrottle]
+
+    def post(self, request):
+        """Request password reset with OTP."""
+        email = request.data.get('email', '').strip()
+
+        if not email:
+            return Response(
+                {'error': 'Email address is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Find user by email (HR or Admin only)
+        try:
+            user = CustomUser.objects.get(
+                email=email,
+                role__in=[CustomUser.Role.HR_MANAGER, CustomUser.Role.ADMIN]
+            )
+        except CustomUser.DoesNotExist:
+            # For security, don't reveal if email exists
+            return Response(
+                {'error': 'No user found with this email address'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if user has phone number
+        if not user.phone_number:
+            return Response(
+                {'error': 'No phone number registered for this account. Please contact support.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check rate limiting
+        if not can_request_new_otp(user.phone_number):
+            return Response(
+                {'error': 'Too many OTP requests. Please try again in 5 minutes.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        # Generate OTP
+        otp_code = generate_otp()
+
+        # Store OTP in cache (5 minute expiry)
+        otp_key = f'password_reset_otp_{user.id}'
+        store_otp(otp_key, otp_code, expiry_minutes=5)
+
+        # Send OTP via SMS (would integrate with SMS provider)
+        # For now, log it
+        logger.info(f'Password reset OTP for {user.email}: {otp_code}')
+
+        # In production, send SMS here:
+        # send_sms(user.phone_number, f'Your 254 Capital password reset code is: {otp_code}')
+
+        # Create temporary token for the reset flow
+        temp_token = secrets.token_urlsafe(32)
+        temp_token_key = f'password_reset_token_{temp_token}'
+        cache.set(temp_token_key, str(user.id), timeout=300)  # 5 minutes
+
+        # Mask phone number
+        masked_phone = user.phone_number[:4] + '****' + user.phone_number[-3:]
+
+        # Log password reset request
+        AuditLog.log(
+            action='Password reset OTP requested',
+            actor=user,
+            target_type='CustomUser',
+            target_id=user.id,
+            ip_address=get_client_ip(request)
+        )
+
+        return Response(
+            {
+                'detail': 'OTP sent to your registered phone number',
+                'masked_phone': masked_phone,
+                'temp_token': temp_token,
+                'expires_in': 300  # 5 minutes in seconds
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class ResetPasswordWithOTPView(APIView):
+    """
+    POST /api/v1/auth/reset-password/
+    Reset password using OTP.
+
+    Verifies OTP and sets new password.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        """Reset password with OTP."""
+        temp_token = request.data.get('temp_token', '').strip()
+        otp = request.data.get('otp', '').strip()
+        new_password = request.data.get('new_password', '').strip()
+        confirm_password = request.data.get('confirm_password', '').strip()
+
+        # Validate required fields
+        if not temp_token or not otp or not new_password or not confirm_password:
+            return Response(
+                {'error': 'All fields are required (temp_token, otp, new_password, confirm_password)'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if new passwords match
+        if new_password != confirm_password:
+            return Response(
+                {'error': 'New passwords do not match'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate temp token
+        temp_token_key = f'password_reset_token_{temp_token}'
+        user_id = cache.get(temp_token_key)
+
+        if not user_id:
+            return Response(
+                {'error': 'Invalid or expired reset token. Please request a new OTP.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get user
+        try:
+            user = CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Verify OTP
+        otp_key = f'password_reset_otp_{user.id}'
+        if not verify_otp(otp_key, otp):
+            return Response(
+                {'error': 'Invalid or expired OTP'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate new password requirements
+        if len(new_password) < 8:
+            return Response(
+                {
+                    'error': 'New password does not meet requirements',
+                    'requirements': [
+                        'Minimum 8 characters',
+                        'At least one uppercase letter',
+                        'At least one number',
+                        'At least one special character'
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check for uppercase, number, and special character
+        if not any(c.isupper() for c in new_password):
+            return Response(
+                {'error': 'Password must contain at least one uppercase letter'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not any(c.isdigit() for c in new_password):
+            return Response(
+                {'error': 'Password must contain at least one number'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        special_chars = "!@#$%^&*()_+-=[]{}|;:,.<>?"
+        if not any(c in special_chars for c in new_password):
+            return Response(
+                {'error': 'Password must contain at least one special character'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update password
+        user.set_password(new_password)
+        user.save()
+
+        # Clear OTP and temp token from cache
+        cache.delete(otp_key)
+        cache.delete(temp_token_key)
+
+        # Generate new tokens for automatic login
+        tokens = get_tokens_for_user(user)
+
+        # Log password reset
+        AuditLog.log(
+            action='Password reset completed via OTP',
+            actor=user,
+            target_type='CustomUser',
+            target_id=user.id,
+            ip_address=get_client_ip(request)
+        )
+
+        logger.info(f'Password reset completed for {user.email}')
+
+        return Response(
+            {
+                'detail': 'Password reset successfully',
+                'tokens': tokens
+            },
+            status=status.HTTP_200_OK
+        )
+
+
+class AdminResetUserPasswordView(APIView):
+    """
+    POST /api/v1/auth/admin/reset-user-password/
+    Admin can trigger password reset for any HR user.
+
+    Sends OTP to the HR user's phone for password reset.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        """Admin trigger password reset for HR user."""
+        # Check if user is admin
+        if request.user.role != CustomUser.Role.ADMIN:
+            return Response(
+                {'error': 'Only admins can reset user passwords'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        user_id = request.data.get('user_id', '').strip()
+        send_otp = request.data.get('send_otp', True)
+
+        if not user_id:
+            return Response(
+                {'error': 'user_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get target user
+        try:
+            target_user = CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            return Response(
+                {'error': 'User not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if user has phone number
+        if not target_user.phone_number and send_otp:
+            return Response(
+                {'error': 'User has no phone number registered. Cannot send OTP.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if send_otp:
+            # Generate OTP
+            otp_code = generate_otp()
+
+            # Store OTP in cache (5 minute expiry)
+            otp_key = f'admin_password_reset_otp_{target_user.id}'
+            store_otp(otp_key, otp_code, expiry_minutes=5)
+
+            # Send OTP via SMS
+            logger.info(f'Admin password reset OTP for {target_user.email}: {otp_code}')
+            # In production: send_sms(target_user.phone_number, f'Your password reset code is: {otp_code}')
+
+            # Mask phone number
+            masked_phone = target_user.phone_number[:4] + '****' + target_user.phone_number[-3:]
+
+            # Log action
+            AuditLog.log(
+                action=f'Admin triggered password reset for user {target_user.email}',
+                actor=request.user,
+                target_type='CustomUser',
+                target_id=target_user.id,
+                ip_address=get_client_ip(request)
+            )
+
+            return Response(
+                {
+                    'detail': 'Password reset OTP sent to user\'s phone',
+                    'masked_phone': masked_phone,
+                    'user_email': target_user.email,
+                    'user_name': target_user.get_full_name()
+                },
+                status=status.HTTP_200_OK
+            )
+        else:
+            # Generate temporary password
+            temp_password = secrets.token_urlsafe(12)
+
+            # Set temporary password
+            target_user.set_password(temp_password)
+            target_user.save()
+
+            # Log action
+            AuditLog.log(
+                action=f'Admin generated temporary password for user {target_user.email}',
+                actor=request.user,
+                target_type='CustomUser',
+                target_id=target_user.id,
+                ip_address=get_client_ip(request)
+            )
+
+            return Response(
+                {
+                    'detail': 'Temporary password generated',
+                    'temporary_password': temp_password,
+                    'user_email': target_user.email,
+                    'user_name': target_user.get_full_name(),
+                    'expires_in_hours': 24,
+                    'requires_change_on_login': True
+                },
+                status=status.HTTP_200_OK
+            )

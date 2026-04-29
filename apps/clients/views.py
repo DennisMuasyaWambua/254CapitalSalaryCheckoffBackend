@@ -1178,8 +1178,7 @@ def generate_collection_report(request):
 
         # Also get new loan applications that are disbursed (active)
         from apps.loans.models import LoanApplication
-        from dateutil.relativedelta import relativedelta
-        from datetime import date as date_class
+        from apps.loans.services import should_appear_in_collection_sheet
 
         logger.info(f'Fetching new loan applications for employer {employer.id}')
         new_loans = LoanApplication.objects.filter(
@@ -1191,54 +1190,37 @@ def generate_collection_report(request):
         # Create unified list of deductions with normalized data structure
         deduction_list = []
 
-        # Report date for maturity checking
-        report_date = date_class(year, month, 1)
-        logger.info(f'Report date for maturity check: {report_date}')
+        logger.info(f'Filtering collection sheet for month={month}, year={year}')
 
-        # Add existing clients
+        # Add existing clients - apply 15th cutoff and maturity filtering
         for client in existing_clients:
-            # Check if loan has matured
-            # Maturity is reached when: start_date + repayment_period months <= report month
-            maturity_date = client.start_date + relativedelta(months=client.repayment_period)
-
-            # Only include if loan hasn't matured (maturity_date is after report month)
-            if maturity_date > report_date:
+            # Use disbursement_date for filtering
+            if client.disbursement_date and should_appear_in_collection_sheet(
+                disbursement_date=client.disbursement_date,
+                repayment_months=client.repayment_period,
+                report_month=month,
+                report_year=year
+            ):
                 deduction_list.append({
                     'name': client.full_name,
                     'loan_amount': client.loan_amount,
                     'monthly_deduction': client.monthly_deduction,
                     'outstanding_balance': client.outstanding_balance
                 })
-                logger.debug(f'Including client {client.full_name}, maturity: {maturity_date}')
+                logger.debug(f'Including client {client.full_name}')
             else:
-                logger.debug(f'Excluding matured client {client.full_name}, maturity: {maturity_date}')
+                logger.debug(f'Excluding client {client.full_name} (not in collection period)')
 
-        # Add new loan applications
+        # Add new loan applications - apply 15th cutoff and maturity filtering
         for loan in new_loans:
-            # Only include if there's outstanding balance
-            if loan.outstanding_balance > 0:
-                # Check if loan has matured
-                # Use first_deduction_date if available, otherwise disbursement_date
-                start_date_for_maturity = loan.first_deduction_date or loan.disbursement_date
-
-                if start_date_for_maturity:
-                    # Maturity is reached after repayment_months from first deduction
-                    maturity_date = start_date_for_maturity + relativedelta(months=loan.repayment_months)
-
-                    # Only include if loan hasn't matured
-                    if maturity_date > report_date:
-                        employee_name = loan.employee.get_full_name() if loan.employee else 'N/A'
-                        deduction_list.append({
-                            'name': employee_name,
-                            'loan_amount': loan.principal_amount,
-                            'monthly_deduction': loan.monthly_deduction,
-                            'outstanding_balance': loan.outstanding_balance
-                        })
-                        logger.debug(f'Including loan {loan.application_number}, maturity: {maturity_date}')
-                    else:
-                        logger.debug(f'Excluding matured loan {loan.application_number}, maturity: {maturity_date}')
-                else:
-                    # If no start date, include it (shouldn't happen for disbursed loans)
+            # Only include if there's outstanding balance and loan should appear in this period
+            if loan.outstanding_balance > 0 and loan.disbursement_date:
+                if should_appear_in_collection_sheet(
+                    disbursement_date=loan.disbursement_date,
+                    repayment_months=loan.repayment_months,
+                    report_month=month,
+                    report_year=year
+                ):
                     employee_name = loan.employee.get_full_name() if loan.employee else 'N/A'
                     deduction_list.append({
                         'name': employee_name,
@@ -1246,7 +1228,11 @@ def generate_collection_report(request):
                         'monthly_deduction': loan.monthly_deduction,
                         'outstanding_balance': loan.outstanding_balance
                     })
-                    logger.warning(f'Loan {loan.application_number} has no start date for maturity check')
+                    logger.debug(f'Including loan {loan.application_number}')
+                else:
+                    logger.debug(f'Excluding loan {loan.application_number} (not in collection period)')
+            elif not loan.disbursement_date:
+                logger.warning(f'Loan {loan.application_number} has no disbursement_date')
 
         # Sort by name
         deduction_list.sort(key=lambda x: x['name'])
@@ -1442,8 +1428,7 @@ def get_collection_report_data(request):
 
         # Also get new loan applications that are disbursed (active)
         from apps.loans.models import LoanApplication
-        from dateutil.relativedelta import relativedelta
-        from datetime import date as date_class
+        from apps.loans.services import should_appear_in_collection_sheet
 
         logger.info(f'Fetching new loan applications for employer {employer.id}')
         new_loans = LoanApplication.objects.filter(
@@ -1455,17 +1440,17 @@ def get_collection_report_data(request):
         # Create unified list of deductions
         deduction_list = []
 
-        # Report date for maturity checking
-        report_date = date_class(year, month, 1)
-        logger.info(f'Report date for maturity check: {report_date}')
+        logger.info(f'Filtering collection sheet data for month={month}, year={year}')
 
-        # Add existing clients
+        # Add existing clients - apply 15th cutoff and maturity filtering
         for client in existing_clients:
-            # Check if loan has matured
-            maturity_date = client.start_date + relativedelta(months=client.repayment_period)
-
-            # Only include if loan hasn't matured
-            if maturity_date > report_date:
+            # Use disbursement_date for filtering
+            if client.disbursement_date and should_appear_in_collection_sheet(
+                disbursement_date=client.disbursement_date,
+                repayment_months=client.repayment_period,
+                report_month=month,
+                report_year=year
+            ):
                 deduction_list.append({
                     'id': str(client.id),
                     'full_name': client.full_name,
@@ -1473,34 +1458,20 @@ def get_collection_report_data(request):
                     'monthly_deduction': str(client.monthly_deduction),
                     'outstanding_balance': str(client.outstanding_balance)
                 })
-                logger.debug(f'Including client {client.full_name}, maturity: {maturity_date}')
+                logger.debug(f'Including client {client.full_name}')
             else:
-                logger.debug(f'Excluding matured client {client.full_name}, maturity: {maturity_date}')
+                logger.debug(f'Excluding client {client.full_name} (not in collection period)')
 
-        # Add new loan applications
+        # Add new loan applications - apply 15th cutoff and maturity filtering
         for loan in new_loans:
-            if loan.outstanding_balance > 0:
-                # Check if loan has matured
-                start_date_for_maturity = loan.first_deduction_date or loan.disbursement_date
-
-                if start_date_for_maturity:
-                    maturity_date = start_date_for_maturity + relativedelta(months=loan.repayment_months)
-
-                    # Only include if loan hasn't matured
-                    if maturity_date > report_date:
-                        employee_name = loan.employee.get_full_name() if loan.employee else 'N/A'
-                        deduction_list.append({
-                            'id': str(loan.id),
-                            'full_name': employee_name,
-                            'loan_amount': str(loan.principal_amount),
-                            'monthly_deduction': str(loan.monthly_deduction),
-                            'outstanding_balance': str(loan.outstanding_balance)
-                        })
-                        logger.debug(f'Including loan {loan.application_number}, maturity: {maturity_date}')
-                    else:
-                        logger.debug(f'Excluding matured loan {loan.application_number}, maturity: {maturity_date}')
-                else:
-                    # If no start date, include it (shouldn't happen for disbursed loans)
+            # Only include if there's outstanding balance and loan should appear in this period
+            if loan.outstanding_balance > 0 and loan.disbursement_date:
+                if should_appear_in_collection_sheet(
+                    disbursement_date=loan.disbursement_date,
+                    repayment_months=loan.repayment_months,
+                    report_month=month,
+                    report_year=year
+                ):
                     employee_name = loan.employee.get_full_name() if loan.employee else 'N/A'
                     deduction_list.append({
                         'id': str(loan.id),
@@ -1509,7 +1480,11 @@ def get_collection_report_data(request):
                         'monthly_deduction': str(loan.monthly_deduction),
                         'outstanding_balance': str(loan.outstanding_balance)
                     })
-                    logger.warning(f'Loan {loan.application_number} has no start date for maturity check')
+                    logger.debug(f'Including loan {loan.application_number}')
+                else:
+                    logger.debug(f'Excluding loan {loan.application_number} (not in collection period)')
+            elif not loan.disbursement_date:
+                logger.warning(f'Loan {loan.application_number} has no disbursement_date')
 
         # Sort by name
         deduction_list.sort(key=lambda x: x['full_name'])

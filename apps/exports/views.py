@@ -17,7 +17,7 @@ from .generators import (
 )
 from apps.accounts.permissions import IsHROrAdmin, IsAdmin
 from apps.loans.models import LoanApplication, RepaymentSchedule
-from apps.loans.services import calculate_first_deduction_date
+from apps.loans.services import calculate_first_deduction_date, should_appear_in_collection_sheet
 import logging
 
 logger = logging.getLogger(__name__)
@@ -335,7 +335,9 @@ class CollectionSheetReportView(APIView):
         if employer:
             loans = loans.filter(employer=employer)
 
-        # Filter by disbursement date if month/year provided
+        # Validate month/year if provided for filtering
+        month_int = None
+        year_int = None
         if month and year:
             try:
                 month_int = int(month)
@@ -345,10 +347,6 @@ class CollectionSheetReportView(APIView):
                         {'detail': 'Month must be between 1 and 12.'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-                loans = loans.filter(
-                    disbursement_date__year=year_int,
-                    disbursement_date__month=month_int
-                )
             except (TypeError, ValueError):
                 return Response(
                     {'detail': 'Invalid month or year.'},
@@ -359,6 +357,20 @@ class CollectionSheetReportView(APIView):
         collection_data = []
 
         for loan in loans:
+            # Apply 15th cutoff and maturity filtering if month/year provided
+            if month_int and year_int:
+                # Only include loans that should appear in this collection sheet
+                if loan.disbursement_date:
+                    if not should_appear_in_collection_sheet(
+                        disbursement_date=loan.disbursement_date,
+                        repayment_months=loan.repayment_months,
+                        report_month=month_int,
+                        report_year=year_int
+                    ):
+                        continue  # Skip this loan
+                else:
+                    # Skip loans without disbursement date
+                    continue
             # Calculate total paid (cumulative deductions)
             total_paid = RepaymentSchedule.objects.filter(
                 loan=loan,

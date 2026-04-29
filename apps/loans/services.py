@@ -347,3 +347,91 @@ def calculate_loan_affordability(
         'monthly_deduction': monthly_deduction,
         'message': message,
     }
+
+
+def should_appear_in_collection_sheet(
+    disbursement_date: date,
+    repayment_months: int,
+    report_month: int,
+    report_year: int
+) -> bool:
+    """
+    Determine if a loan should appear in the collection sheet for a given period.
+
+    Business Rules:
+    1. Loans disbursed before 15th → First deduction in same month (25th)
+    2. Loans disbursed on/after 15th → First deduction next month (25th)
+    3. Loans should only appear during their repayment period (not after maturity)
+
+    Args:
+        disbursement_date: Date when loan was disbursed
+        repayment_months: Number of months for repayment
+        report_month: Month of the collection sheet (1-12)
+        report_year: Year of the collection sheet
+
+    Returns:
+        True if loan should appear on this month's collection sheet
+
+    Examples:
+        >>> # Loan disbursed April 10, 2026 (before 15th) - 6 months
+        >>> should_appear_in_collection_sheet(date(2026, 4, 10), 6, 4, 2026)
+        True  # Should appear in April sheet
+
+        >>> # Loan disbursed April 15, 2026 (on 15th) - 6 months
+        >>> should_appear_in_collection_sheet(date(2026, 4, 15), 6, 4, 2026)
+        False  # Should NOT appear in April sheet
+
+        >>> should_appear_in_collection_sheet(date(2026, 4, 15), 6, 5, 2026)
+        True  # Should appear in May sheet
+
+        >>> # Check maturity - 6-month loan disbursed April 10
+        >>> should_appear_in_collection_sheet(date(2026, 4, 10), 6, 10, 2026)
+        False  # Last deduction is September 25, 2026 (month 6)
+    """
+    # Calculate first deduction date
+    first_deduction_date = calculate_first_deduction_date(disbursement_date)
+
+    # Create report date (25th of the report month)
+    report_date = date(report_year, report_month, 25)
+
+    # Loan should only appear if report_date >= first_deduction_date
+    if report_date < first_deduction_date:
+        return False
+
+    # Calculate last deduction date (maturity date)
+    # Last deduction = first_deduction_date + (repayment_months - 1) months
+    last_deduction_date = first_deduction_date + relativedelta(months=repayment_months - 1)
+
+    # Loan should not appear if report_date > last_deduction_date
+    if report_date > last_deduction_date:
+        return False
+
+    return True
+
+
+def calculate_loan_maturity_date(
+    disbursement_date: date,
+    repayment_months: int
+) -> date:
+    """
+    Calculate the maturity date of a loan (date of last deduction).
+
+    Args:
+        disbursement_date: Date when loan was disbursed
+        repayment_months: Number of months for repayment
+
+    Returns:
+        Date of the last scheduled deduction
+
+    Examples:
+        >>> # Loan disbursed April 10, 2026 - 6 months
+        >>> calculate_loan_maturity_date(date(2026, 4, 10), 6)
+        date(2026, 9, 25)  # First: Apr 25, Last: Sep 25 (6 deductions)
+
+        >>> # Loan disbursed April 15, 2026 - 6 months
+        >>> calculate_loan_maturity_date(date(2026, 4, 15), 6)
+        date(2026, 10, 25)  # First: May 25, Last: Oct 25 (6 deductions)
+    """
+    first_deduction_date = calculate_first_deduction_date(disbursement_date)
+    last_deduction_date = first_deduction_date + relativedelta(months=repayment_months - 1)
+    return last_deduction_date
