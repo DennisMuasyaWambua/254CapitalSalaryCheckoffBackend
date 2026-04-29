@@ -1710,14 +1710,21 @@ class LoanSearchView(APIView):
         for loan in loans:
             results.append({
                 'id': str(loan.id),
-                'application_number': loan.application_number,
+                'loan_number': loan.application_number,
                 'employee_name': loan.employee.get_full_name(),
-                'employee_mobile': loan.employee.phone,
+                'employee_id': loan.employee.national_id,
                 'employer_name': loan.employer.name,
-                'principal_amount': str(loan.principal_amount),
-                'total_repayment': str(loan.total_repayment),
-                'outstanding_balance': str(loan.outstanding_balance),
+                'employer_id': str(loan.employer.id),
+                'original_amount': float(loan.principal_amount),
+                'total_due': float(loan.total_repayment),
+                'amount_paid': float(loan.amount_paid) if hasattr(loan, 'amount_paid') else 0.0,
+                'outstanding_balance': float(loan.outstanding_balance),
+                'start_date': loan.created_at.date().isoformat(),
                 'disbursement_date': loan.disbursement_date.isoformat() if loan.disbursement_date else None,
+                'repayment_period': loan.repayment_months,
+                'monthly_deduction': float(loan.monthly_deduction),
+                'interest_rate': float(loan.interest_rate),
+                'status': loan.status,
             })
 
         return Response({
