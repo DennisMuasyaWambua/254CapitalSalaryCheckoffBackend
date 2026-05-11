@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'apps.reconciliation',
     'apps.exports',
     'apps.audit',
+    'apps.company_management',
 ]
 
 MIDDLEWARE = [
