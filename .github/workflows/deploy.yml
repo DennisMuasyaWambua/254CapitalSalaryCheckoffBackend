@@ -71,6 +71,22 @@ jobs:
 
             echo "📦 Starting deployment..."
 
+            # Check disk space
+            echo "📊 Checking disk space..."
+            df -h
+
+            # Aggressive cleanup BEFORE pulling new image
+            echo "🧹 Cleaning up disk space..."
+            docker system prune -af --volumes || true
+            docker builder prune -af || true
+
+            # Clean system logs
+            sudo journalctl --vacuum-time=2d || true
+
+            # Check disk space after cleanup
+            echo "📊 Disk space after cleanup:"
+            df -h
+
             # Navigate to application directory
             cd /opt/salary_checkoff
 
@@ -101,10 +117,6 @@ jobs:
             # Collect static files
             echo "📁 Collecting static files..."
             docker-compose exec -T web python manage.py collectstatic --noinput
-
-            # Clean up old images
-            echo "🧹 Cleaning up old Docker images..."
-            docker image prune -af --filter "until=24h" || true
 
             # Check health
             echo "🏥 Checking application health..."
