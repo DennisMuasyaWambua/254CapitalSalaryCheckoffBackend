@@ -351,7 +351,7 @@ class AuditLog(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='audit_logs',
+        related_name='company_audit_logs',
         help_text='User who performed the action (actor)'
     )
     target_user = models.ForeignKey(
@@ -367,7 +367,7 @@ class AuditLog(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='audit_logs',
+        related_name='company_audit_logs',
         help_text='Organization context of the action'
     )
     target_resource_type = models.CharField(
@@ -408,7 +408,7 @@ class AuditLog(models.Model):
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
-        db_table = 'audit_logs'
+        db_table = 'company_management_audit_logs'
         indexes = [
             models.Index(fields=['event_type', 'created_at']),
             models.Index(fields=['user', 'created_at']),
@@ -416,12 +416,12 @@ class AuditLog(models.Model):
             models.Index(fields=['result', 'created_at']),
             models.Index(fields=['-created_at']),
         ]
-        verbose_name = 'Audit Log'
-        verbose_name_plural = 'Audit Logs'
+        verbose_name = 'Company Audit Log'
+        verbose_name_plural = 'Company Audit Logs'
         ordering = ['-created_at']
         # Prevent updates and deletes in admin
         permissions = [
-            ('view_audit_log', 'Can view audit logs'),
+            ('view_company_audit_log', 'Can view company audit logs'),
         ]
 
     def __str__(self):
