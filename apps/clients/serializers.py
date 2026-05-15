@@ -106,13 +106,7 @@ class ExistingClientSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         """Validate the entire object."""
-        # Ensure disbursement date is after or equal to start date
-        if 'disbursement_date' in attrs and 'start_date' in attrs:
-            if attrs['disbursement_date'] < attrs['start_date']:
-                raise serializers.ValidationError({
-                    'disbursement_date': 'Disbursement date cannot be before start date.'
-                })
-
+        # No date order validation - allow either start_date or disbursement_date to come first
         return attrs
 
 
