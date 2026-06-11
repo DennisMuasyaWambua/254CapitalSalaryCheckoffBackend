@@ -19,7 +19,7 @@ class EmployerListSerializer(serializers.ModelSerializer):
         model = Employer
         fields = [
             'id', 'name', 'registration_number', 'address',
-            'payroll_cycle_day', 'hr_contact_name', 'hr_contact_email',
+            'payroll_cycle_day', 'interest_method', 'interest_rate', 'hr_contact_name', 'hr_contact_email',
             'hr_contact_phone', 'is_active', 'onboarded_by', 'onboarded_at',
             'onboarded_date', 'updated_at', 'total_employees', 'active_loans_count',
             'pending_applications_count'
@@ -44,7 +44,7 @@ class EmployerDetailSerializer(serializers.ModelSerializer):
         model = Employer
         fields = [
             'id', 'name', 'registration_number', 'address',
-            'payroll_cycle_day', 'hr_contact_name', 'hr_contact_email',
+            'payroll_cycle_day', 'interest_method', 'interest_rate', 'hr_contact_name', 'hr_contact_email',
             'hr_contact_phone', 'is_active', 'onboarded_by', 'onboarded_by_name',
             'onboarded_at', 'updated_at', 'total_employees',
             'active_loans_count', 'pending_applications_count'
@@ -65,8 +65,24 @@ class EmployerCreateSerializer(serializers.ModelSerializer):
         model = Employer
         fields = [
             'name', 'registration_number', 'address', 'payroll_cycle_day',
-            'hr_contact_name', 'hr_contact_email', 'hr_contact_phone'
+            'interest_method', 'interest_rate', 'hr_contact_name', 'hr_contact_email', 'hr_contact_phone'
         ]
+
+    def validate_interest_method(self, value):
+        """Validate interest method is valid."""
+        valid_methods = ['flat', 'reducing_balance']
+        if value and value not in valid_methods:
+            raise serializers.ValidationError(f'Interest method must be one of: {", ".join(valid_methods)}')
+        return value or 'flat'  # Default to flat if not provided
+
+    def validate_interest_rate(self, value):
+        """Validate interest rate is within acceptable range."""
+        from decimal import Decimal
+        if value is None:
+            return Decimal('0.05')  # Default 5% monthly
+        if value < Decimal('0.0001') or value > Decimal('1.0'):
+            raise serializers.ValidationError('Interest rate must be between 0.01% (0.0001) and 100% (1.0).')
+        return value
 
     def validate_hr_contact_phone(self, value):
         """Validate and normalize HR contact phone."""
@@ -99,10 +115,26 @@ class EmployerUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Employer
         fields = [
-            'name', 'address', 'payroll_cycle_day',
+            'name', 'address', 'payroll_cycle_day', 'interest_method', 'interest_rate',
             'hr_contact_name', 'hr_contact_email', 'hr_contact_phone',
             'is_active'
         ]
+
+    def validate_interest_method(self, value):
+        """Validate interest method is valid."""
+        valid_methods = ['flat', 'reducing_balance']
+        if value and value not in valid_methods:
+            raise serializers.ValidationError(f'Interest method must be one of: {", ".join(valid_methods)}')
+        return value
+
+    def validate_interest_rate(self, value):
+        """Validate interest rate is within acceptable range."""
+        from decimal import Decimal
+        if value is None:
+            return None  # Allow None for partial updates
+        if value < Decimal('0.0001') or value > Decimal('1.0'):
+            raise serializers.ValidationError('Interest rate must be between 0.01% (0.0001) and 100% (1.0).')
+        return value
 
     def validate_hr_contact_phone(self, value):
         """Validate and normalize HR contact phone."""

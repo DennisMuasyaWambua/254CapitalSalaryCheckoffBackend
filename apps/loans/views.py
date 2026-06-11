@@ -27,7 +27,8 @@ from .serializers import (
 import hashlib
 import json
 from .services import (
-    calculate_flat_interest, calculate_amortized, generate_application_number,
+    calculate_flat_interest, calculate_amortized, calculate_loan_for_employer,
+    calculate_reducing_balance, generate_application_number,
     calculate_first_deduction_date, generate_repayment_schedule
 )
 from apps.accounts.permissions import IsEmployee, IsHRManager, IsAdmin, IsHROrAdmin
@@ -86,11 +87,17 @@ class LoanApplicationListCreateView(APIView):
         # Get employee profile
         employee_profile = request.user.employee_profile
 
-        # Calculate repayment
-        calc = calculate_flat_interest(
+        # Get employer's interest method and rate
+        employer = employee_profile.employer
+        interest_method = getattr(employer, 'interest_method', 'flat') if employer else 'flat'
+        interest_rate = getattr(employer, 'interest_rate', Decimal('0.05')) if employer else Decimal('0.05')
+
+        # Calculate repayment using employer's interest method and rate
+        calc = calculate_loan_for_employer(
             serializer.validated_data['principal_amount'],
-            Decimal('0.05'),  # 5% flat interest
-            serializer.validated_data['repayment_months']
+            serializer.validated_data['repayment_months'],
+            interest_method,
+            Decimal(str(interest_rate))  # Use employer's interest rate
         )
 
         # Generate application number
@@ -374,7 +381,40 @@ class LoanCalculatorView(APIView):
                 'schedule': schedule
             }, status=status.HTTP_200_OK)
 
-        else:  # amortized
+        elif calc_type == 'reducing_balance':
+            # Reducing balance / EMI calculation using monthly rate
+            result = calculate_reducing_balance(principal, annual_rate, months)
+            first_deduction = calculate_first_deduction_date(timezone.now().date())
+
+            # Add due dates to schedule
+            from dateutil.relativedelta import relativedelta
+            current_date = first_deduction
+            schedule = []
+            for item in result.get('schedule', []):
+                schedule.append({
+                    'installment_number': item['installment'],
+                    'due_date': current_date.isoformat(),
+                    'amount': str(item['amount']),
+                    'principal_portion': str(item['principal_portion']),
+                    'interest_portion': str(item['interest_portion']),
+                    'running_balance': str(item['running_balance']),
+                    'is_first_deduction': (item['installment'] == 1)
+                })
+                current_date = current_date + relativedelta(months=1)
+
+            return Response({
+                'calculation_type': 'reducing_balance',
+                'principal_amount': str(principal),
+                'interest_rate': str(annual_rate),
+                'repayment_months': months,
+                'total_repayment': str(result['total_repayment']),
+                'monthly_deduction': str(result['monthly_deduction']),
+                'interest_amount': str(result['interest_amount']),
+                'first_deduction_date': first_deduction.isoformat(),
+                'schedule': schedule
+            }, status=status.HTTP_200_OK)
+
+        else:  # amortized (legacy support)
             result = calculate_amortized(principal, annual_rate, months)
             first_deduction = calculate_first_deduction_date(timezone.now().date())
 

@@ -71,12 +71,17 @@ class UpdateLoanView(APIView):
 
         # Recalculate loan amounts if principal, rate, or months changed
         if any(field in ['principal_amount', 'interest_rate', 'repayment_months'] for field in changed_fields):
-            from .services import calculate_flat_interest
+            from .services import calculate_loan_for_employer
 
-            calculation = calculate_flat_interest(
+            # Get employer's interest method
+            employer = loan.employer
+            interest_method = getattr(employer, 'interest_method', 'flat') if employer else 'flat'
+
+            calculation = calculate_loan_for_employer(
                 principal=loan.principal_amount,
-                rate=loan.interest_rate,
-                months=loan.repayment_months
+                months=loan.repayment_months,
+                interest_method=interest_method,
+                monthly_rate=loan.interest_rate
             )
 
             loan.interest_amount = calculation['interest_amount']
