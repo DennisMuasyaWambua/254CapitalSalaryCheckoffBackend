@@ -245,29 +245,39 @@ if REDIS_URL:
             'LOCATION': REDIS_URL,
             'OPTIONS': {
                 'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-                'IGNORE_EXCEPTIONS': True,  # Silently degrade if Redis is unreachable
+                'IGNORE_EXCEPTIONS': True,
                 'CONNECTION_POOL_CLASS_KWARGS': {
                     'max_connections': 50,
                     'retry_on_timeout': True,
                 },
             },
             'KEY_PREFIX': '254capital',
-            'TIMEOUT': 300,  # 5 minutes default
-        }
+            'TIMEOUT': 300,
+        },
+        # Auth cache always uses the database so OTPs/sessions survive Redis outages
+        # and are visible to every gunicorn worker. Run createcachetable once.
+        'auth': {
+            'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+            'LOCATION': 'django_cache_table',
+            'TIMEOUT': 300,
+        },
     }
 else:
-    # Fallback: use DB cache so OTP/session state is shared across all gunicorn workers.
-    # Run `python manage.py createcachetable` once to create the table.
     CACHES = {
         'default': {
             'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
             'LOCATION': 'django_cache_table',
             'TIMEOUT': 300,
-        }
+        },
+        'auth': {
+            'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+            'LOCATION': 'django_cache_table',
+            'TIMEOUT': 300,
+        },
     }
     # Without a broker, run Celery tasks inline so SMS is sent in-process.
     CELERY_TASK_ALWAYS_EAGER = True
-    CELERY_TASK_EAGER_PROPAGATES = False  # Don't let task errors crash the request
+    CELERY_TASK_EAGER_PROPAGATES = False
 
 # Celery Configuration
 CELERY_BROKER_URL = env('CELERY_BROKER_URL', default=REDIS_URL or 'redis://localhost:6379/0')

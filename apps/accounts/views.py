@@ -11,7 +11,11 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView as SimpleJWTTokenRefreshView
 from django_otp.plugins.otp_totp.models import TOTPDevice
-from django.core.cache import cache
+from django.core.cache import cache, caches
+
+# Auth-critical data (OTP sessions, phone verification) always goes through the
+# database cache so it is shared across all gunicorn workers and survives Redis outages.
+auth_cache = caches['auth']
 from django.utils import timezone
 from django.conf import settings
 import logging
@@ -157,7 +161,7 @@ class VerifyOTPView(APIView):
         except CustomUser.DoesNotExist:
             # New user - return flag to proceed with registration
             # Store verified phone in cache for 10 minutes
-            cache.set(
+            auth_cache.set(
                 f'verified_phone:{phone_number}',
                 True,
                 timeout=600  # 10 minutes
@@ -191,7 +195,7 @@ class RegisterEmployeeView(APIView):
         phone_number = serializer.validated_data['phone_number']
 
         # Verify phone was verified via OTP
-        is_verified = cache.get(f'verified_phone:{phone_number}')
+        is_verified = auth_cache.get(f'verified_phone:{phone_number}')
         if not is_verified:
             return Response(
                 {'detail': 'Phone number must be verified first. Please verify via OTP.'},
@@ -202,7 +206,7 @@ class RegisterEmployeeView(APIView):
         user = serializer.save()
 
         # Clear verified phone from cache
-        cache.delete(f'verified_phone:{phone_number}')
+        auth_cache.delete(f'verified_phone:{phone_number}')
 
         # Generate tokens
         tokens = get_tokens_for_user(user)
@@ -297,13 +301,9 @@ class HRLoginView(APIView):
         # Store OTP in Redis
         otp_info = store_otp(user.phone_number, otp_code)
 
-        # Store user ID in cache for OTP verification
-        cache_key = f'login_otp_pending:{access_token_str}'
-        cache.set(
-            cache_key,
-            str(user.id),
-            timeout=300  # 5 minutes
-        )
+        # Store user ID in auth cache (database-backed, shared across all workers)
+        login_cache_key = f'login_otp_pending:{access_token_str}'
+        auth_cache.set(login_cache_key, str(user.id), timeout=300)
 
         # Send OTP via SMS (runs inline when CELERY_TASK_ALWAYS_EAGER=True)
         try:
@@ -311,11 +311,9 @@ class HRLoginView(APIView):
             send_otp_sms.delay(user.phone_number, otp_code)
             logger.info(f'HR login OTP SMS dispatched for {otp_info["masked_phone"]}')
         except Exception as e:
-            # SMS failed — log OTP so it can be retrieved from Railway logs
             logger.warning(f'HR login SMS failed ({e}). OTP for {otp_info["masked_phone"]}: {otp_code}')
 
-        cached_value = cache.get(cache_key)
-        logger.info(f'Cache set: key={cache_key[:40]}..., stored={cached_value == str(user.id)}')
+        logger.info(f'HR login session stored for {otp_info["masked_phone"]}')
 
         return Response({
             'detail': 'OTP sent to your phone. Please verify to complete login.',
@@ -364,13 +362,9 @@ class AdminLoginView(APIView):
         # Store OTP in Redis
         otp_info = store_otp(user.phone_number, otp_code)
 
-        # Store user ID in cache for OTP verification
-        cache_key = f'login_otp_pending:{access_token_str}'
-        cache.set(
-            cache_key,
-            str(user.id),
-            timeout=300  # 5 minutes
-        )
+        # Store user ID in auth cache (database-backed, shared across all workers)
+        login_cache_key = f'login_otp_pending:{access_token_str}'
+        auth_cache.set(login_cache_key, str(user.id), timeout=300)
 
         # Send OTP via SMS (runs inline when CELERY_TASK_ALWAYS_EAGER=True)
         try:
@@ -378,11 +372,9 @@ class AdminLoginView(APIView):
             send_otp_sms.delay(user.phone_number, otp_code)
             logger.info(f'Admin login OTP SMS dispatched for {otp_info["masked_phone"]}')
         except Exception as e:
-            # SMS failed — log OTP so it can be retrieved from Railway logs
             logger.warning(f'Admin login SMS failed ({e}). OTP for {otp_info["masked_phone"]}: {otp_code}')
 
-        cached_value = cache.get(cache_key)
-        logger.info(f'Cache set: key={cache_key[:40]}..., stored={cached_value == str(user.id)}')
+        logger.info(f'Admin login session stored for {otp_info["masked_phone"]}')
 
         return Response({
             'detail': 'OTP sent to your phone. Please verify to complete login.',
@@ -413,11 +405,11 @@ class VerifyLoginOTPView(APIView):
 
         # Get user ID from cache
         cache_key = f'login_otp_pending:{temp_token}'
-        user_id = cache.get(cache_key)
-        logger.info(f'Cache lookup: key={cache_key}, found={user_id is not None}, token={temp_token[:20]}...')
+        user_id = auth_cache.get(cache_key)
+        logger.info(f'Auth cache lookup: found={user_id is not None}, token={temp_token[:20]}...')
 
         if not user_id:
-            logger.error(f'Cache miss for key={cache_key}')
+            logger.error(f'Auth cache miss for login_otp_pending key')
             return Response(
                 {'detail': 'OTP session expired or invalid. Please log in again.'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -448,8 +440,8 @@ class VerifyLoginOTPView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Clear OTP pending from cache
-        cache.delete(f'login_otp_pending:{temp_token}')
+        # Clear OTP pending from auth cache
+        auth_cache.delete(f'login_otp_pending:{temp_token}')
 
         # Generate full tokens
         tokens = get_tokens_for_user(user)

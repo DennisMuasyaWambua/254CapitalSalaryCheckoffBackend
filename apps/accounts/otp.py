@@ -10,8 +10,12 @@ import hashlib
 import logging
 from typing import Tuple, Optional
 from django.conf import settings
-from django.core.cache import cache
+from django.core.cache import caches
 from common.utils import cache_key, mask_phone_number
+
+# Always use the database-backed cache for OTPs so they survive Redis outages
+# and are shared across all gunicorn workers.
+cache = caches['auth']
 
 logger = logging.getLogger(__name__)
 

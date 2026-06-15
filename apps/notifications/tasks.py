@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=2)
 def send_otp_sms(self, phone_number: str, otp_code: str):
     """
     Send OTP SMS to phone number.
@@ -20,26 +20,31 @@ def send_otp_sms(self, phone_number: str, otp_code: str):
         phone_number: Recipient phone number
         otp_code: 6-digit OTP code
     """
+    message = (
+        f'Your 254 Capital verification code is {otp_code}. '
+        f'Valid for 5 minutes. Do not share this code with anyone.'
+    )
+
     try:
-        message = (
-            f'Your 254 Capital verification code is {otp_code}. '
-            f'Valid for 5 minutes. Do not share this code with anyone.'
-        )
-
         result = send_sms(phone_number, message)
-
-        if not result['success']:
-            logger.error(f'OTP SMS failed for {phone_number}: {result.get("error")}')
-            # Retry on failure
-            raise Exception(result.get('error', 'SMS send failed'))
-
-        logger.info(f'OTP SMS sent to {phone_number}')
-        return result
-
     except Exception as e:
-        logger.error(f'OTP SMS task failed: {str(e)}')
-        # Retry with exponential backoff
-        raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
+        logger.error(f'OTP SMS exception for {phone_number}: {e}')
+        # Don't retry in eager (sync) mode — it would block the request
+        if not self.request.called_directly:
+            raise self.retry(exc=e, countdown=30 * (2 ** self.request.retries))
+        return {'success': False, 'error': str(e)}
+
+    if not result['success']:
+        logger.error(f'OTP SMS failed for {phone_number}: {result.get("error")}')
+        if not self.request.called_directly:
+            raise self.retry(
+                exc=Exception(result.get('error', 'SMS send failed')),
+                countdown=30 * (2 ** self.request.retries)
+            )
+    else:
+        logger.info(f'OTP SMS sent to {phone_number}')
+
+    return result
 
 
 @shared_task
