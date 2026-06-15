@@ -235,27 +235,38 @@ CORS_ALLOW_HEADERS = [
 ]
 
 # Redis Configuration
-REDIS_URL = env('REDIS_URL', default='redis://localhost:6379/0')
+REDIS_URL = env('REDIS_URL', default=None)
+DJANGO_REDIS_IGNORE_EXCEPTIONS = True  # Global fallback: never let Redis failures crash requests
 
-CACHES = {
-    'default': {
-        'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': REDIS_URL,
-        'OPTIONS': {
-            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-            'CONNECTION_POOL_CLASS_KWARGS': {
-                'max_connections': 50,
-                'retry_on_timeout': True,
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'IGNORE_EXCEPTIONS': True,  # Silently degrade if Redis is unreachable
+                'CONNECTION_POOL_CLASS_KWARGS': {
+                    'max_connections': 50,
+                    'retry_on_timeout': True,
+                },
             },
-        },
-        'KEY_PREFIX': '254capital',
-        'TIMEOUT': 300,  # 5 minutes default
+            'KEY_PREFIX': '254capital',
+            'TIMEOUT': 300,  # 5 minutes default
+        }
     }
-}
+else:
+    # Fallback when no Redis is configured (e.g. Railway without Redis addon)
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': '254capital',
+        }
+    }
 
 # Celery Configuration
-CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
+CELERY_BROKER_URL = env('CELERY_BROKER_URL', default=REDIS_URL or 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default=REDIS_URL or 'redis://localhost:6379/0')
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'

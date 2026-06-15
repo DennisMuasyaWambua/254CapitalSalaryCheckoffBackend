@@ -87,8 +87,9 @@ LOGGING = {
 import os
 os.makedirs(BASE_DIR / 'logs', exist_ok=True)
 
-# Cache configuration for production (use Redis)
-CACHES['default']['TIMEOUT'] = 3600  # 1 hour
+# Cache configuration for production (extend timeout if Redis is available)
+if CACHES['default']['BACKEND'] == 'django_redis.cache.RedisCache':
+    CACHES['default']['TIMEOUT'] = 3600  # 1 hour
 
 # Session configuration
 SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
