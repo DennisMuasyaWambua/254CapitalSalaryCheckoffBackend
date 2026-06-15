@@ -256,13 +256,18 @@ if REDIS_URL:
         }
     }
 else:
-    # Fallback when no Redis is configured (e.g. Railway without Redis addon)
+    # Fallback: use DB cache so OTP/session state is shared across all gunicorn workers.
+    # Run `python manage.py createcachetable` once to create the table.
     CACHES = {
         'default': {
-            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
-            'LOCATION': '254capital',
+            'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+            'LOCATION': 'django_cache_table',
+            'TIMEOUT': 300,
         }
     }
+    # Without a broker, run Celery tasks inline so SMS is sent in-process.
+    CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_TASK_EAGER_PROPAGATES = False  # Don't let task errors crash the request
 
 # Celery Configuration
 CELERY_BROKER_URL = env('CELERY_BROKER_URL', default=REDIS_URL or 'redis://localhost:6379/0')

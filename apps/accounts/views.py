@@ -82,11 +82,13 @@ class SendOTPView(APIView):
         # Store hashed OTP in Redis
         otp_info = store_otp(phone_number, otp_code)
 
-        # Send OTP via SMS (async Celery task)
-        from apps.notifications.tasks import send_otp_sms
-        send_otp_sms.delay(phone_number, otp_code)
-
-        logger.info(f'OTP sent to {otp_info["masked_phone"]}')
+        # Send OTP via SMS (runs inline when CELERY_TASK_ALWAYS_EAGER=True)
+        try:
+            from apps.notifications.tasks import send_otp_sms
+            send_otp_sms.delay(phone_number, otp_code)
+            logger.info(f'OTP SMS dispatched for {otp_info["masked_phone"]}')
+        except Exception as e:
+            logger.warning(f'OTP SMS failed ({e}). OTP for {otp_info["masked_phone"]}: {otp_code}')
 
         return Response({
             'detail': 'OTP sent successfully',
@@ -295,10 +297,6 @@ class HRLoginView(APIView):
         # Store OTP in Redis
         otp_info = store_otp(user.phone_number, otp_code)
 
-        # Send OTP via SMS (async Celery task)
-        from apps.notifications.tasks import send_otp_sms
-        send_otp_sms.delay(user.phone_number, otp_code)
-
         # Store user ID in cache for OTP verification
         cache_key = f'login_otp_pending:{access_token_str}'
         cache.set(
@@ -307,11 +305,17 @@ class HRLoginView(APIView):
             timeout=300  # 5 minutes
         )
 
-        # Verify cache was set successfully
+        # Send OTP via SMS (runs inline when CELERY_TASK_ALWAYS_EAGER=True)
+        try:
+            from apps.notifications.tasks import send_otp_sms
+            send_otp_sms.delay(user.phone_number, otp_code)
+            logger.info(f'HR login OTP SMS dispatched for {otp_info["masked_phone"]}')
+        except Exception as e:
+            # SMS failed — log OTP so it can be retrieved from Railway logs
+            logger.warning(f'HR login SMS failed ({e}). OTP for {otp_info["masked_phone"]}: {otp_code}')
+
         cached_value = cache.get(cache_key)
-        logger.info(f'HR login OTP sent to {otp_info["masked_phone"]}')
-        logger.info(f'Cache set: key={cache_key}, user_id={user.id}, token={access_token_str[:20]}...')
-        logger.info(f'Cache verify: immediate get returned {cached_value}, matches={cached_value == str(user.id)}')
+        logger.info(f'Cache set: key={cache_key[:40]}..., stored={cached_value == str(user.id)}')
 
         return Response({
             'detail': 'OTP sent to your phone. Please verify to complete login.',
@@ -360,10 +364,6 @@ class AdminLoginView(APIView):
         # Store OTP in Redis
         otp_info = store_otp(user.phone_number, otp_code)
 
-        # Send OTP via SMS (async Celery task)
-        from apps.notifications.tasks import send_otp_sms
-        send_otp_sms.delay(user.phone_number, otp_code)
-
         # Store user ID in cache for OTP verification
         cache_key = f'login_otp_pending:{access_token_str}'
         cache.set(
@@ -372,11 +372,17 @@ class AdminLoginView(APIView):
             timeout=300  # 5 minutes
         )
 
-        # Verify cache was set successfully
+        # Send OTP via SMS (runs inline when CELERY_TASK_ALWAYS_EAGER=True)
+        try:
+            from apps.notifications.tasks import send_otp_sms
+            send_otp_sms.delay(user.phone_number, otp_code)
+            logger.info(f'Admin login OTP SMS dispatched for {otp_info["masked_phone"]}')
+        except Exception as e:
+            # SMS failed — log OTP so it can be retrieved from Railway logs
+            logger.warning(f'Admin login SMS failed ({e}). OTP for {otp_info["masked_phone"]}: {otp_code}')
+
         cached_value = cache.get(cache_key)
-        logger.info(f'Admin login OTP sent to {otp_info["masked_phone"]}')
-        logger.info(f'Cache set: key={cache_key}, user_id={user.id}, token={access_token_str[:20]}...')
-        logger.info(f'Cache verify: immediate get returned {cached_value}, matches={cached_value == str(user.id)}')
+        logger.info(f'Cache set: key={cache_key[:40]}..., stored={cached_value == str(user.id)}')
 
         return Response({
             'detail': 'OTP sent to your phone. Please verify to complete login.',
