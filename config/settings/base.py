@@ -275,13 +275,18 @@ else:
             'TIMEOUT': 300,
         },
     }
-    # Without a broker, run Celery tasks inline so SMS is sent in-process.
-    CELERY_TASK_ALWAYS_EAGER = True
-    CELERY_TASK_EAGER_PROPAGATES = False
 
 # Celery Configuration
 CELERY_BROKER_URL = env('CELERY_BROKER_URL', default=REDIS_URL or 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default=REDIS_URL or 'redis://localhost:6379/0')
+# This deployment runs a single web process with no dedicated Celery worker
+# (see start.sh - it only starts gunicorn). Tasks queued to a broker that
+# nothing consumes (e.g. SMS sends) would be silently dropped whenever
+# REDIS_URL is configured, even though a Redis broker is reachable. Always
+# run tasks inline/synchronously unless a real worker is deployed and this
+# is explicitly overridden via env var.
+CELERY_TASK_ALWAYS_EAGER = env.bool('CELERY_TASK_ALWAYS_EAGER', default=True)
+CELERY_TASK_EAGER_PROPAGATES = env.bool('CELERY_TASK_EAGER_PROPAGATES', default=False)
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
