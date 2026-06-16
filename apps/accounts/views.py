@@ -287,13 +287,13 @@ class HRLoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Generate temporary token (expires in 5 minutes)
-        temp_token = RefreshToken.for_user(user)
-        temp_token.set_exp(lifetime=timezone.timedelta(minutes=5))
-
-        # CRITICAL: Generate access token ONCE and reuse it
-        # Each call to temp_token.access_token creates a NEW token with different JTI
-        access_token_str = str(temp_token.access_token)
+        # Generate an opaque, short-lived session token to track this login
+        # attempt. This is NOT a JWT - it's just a random reference used to
+        # look up the pending login in the cache. Using a real JWT here
+        # previously caused the cache key (which embeds this token) to
+        # exceed the 255-char limit of the DB cache's cache_key column,
+        # silently breaking OTP storage on Postgres (Railway).
+        access_token_str = secrets.token_urlsafe(32)
 
         # Generate OTP
         otp_code = generate_otp()
@@ -348,13 +348,13 @@ class AdminLoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Generate temporary token (expires in 5 minutes)
-        temp_token = RefreshToken.for_user(user)
-        temp_token.set_exp(lifetime=timezone.timedelta(minutes=5))
-
-        # CRITICAL: Generate access token ONCE and reuse it
-        # Each call to temp_token.access_token creates a NEW token with different JTI
-        access_token_str = str(temp_token.access_token)
+        # Generate an opaque, short-lived session token to track this login
+        # attempt. This is NOT a JWT - it's just a random reference used to
+        # look up the pending login in the cache. Using a real JWT here
+        # previously caused the cache key (which embeds this token) to
+        # exceed the 255-char limit of the DB cache's cache_key column,
+        # silently breaking OTP storage on Postgres (Railway).
+        access_token_str = secrets.token_urlsafe(32)
 
         # Generate OTP
         otp_code = generate_otp()
