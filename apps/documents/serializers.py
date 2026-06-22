@@ -192,17 +192,43 @@ class DocumentUploadSerializer(serializers.Serializer):
 
 
 class DocumentListSerializer(serializers.ModelSerializer):
-    """Minimal serializer for listing documents."""
+    """
+    Serializer for listing documents.
+
+    Includes the file URL and type flags so the employee, HR and admin UIs can
+    render inline previews/thumbnails (images and PDFs) and downloads directly
+    from the list response.
+    """
 
     document_type_display = serializers.CharField(
         source='get_document_type_display',
         read_only=True
     )
+    file_url = serializers.SerializerMethodField()
+    is_image = serializers.BooleanField(read_only=True)
+    is_pdf = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Document
         fields = [
             'id', 'document_type', 'document_type_display',
-            'original_filename', 'file_size', 'created_at'
+            'original_filename', 'file_size', 'created_at',
+            'file', 'file_url', 'mime_type', 'is_image', 'is_pdf'
         ]
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = ['id', 'created_at', 'mime_type']
+
+    def get_file_url(self, obj):
+        """Get file URL (presigned if S3, absolute if local)."""
+        if not obj.file:
+            return None
+        request = self.context.get('request')
+        if not settings.USE_S3:
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+        # S3: presigned URL
+        try:
+            from django.core.files.storage import default_storage
+            return default_storage.url(obj.file.name)
+        except Exception:
+            return obj.file.url

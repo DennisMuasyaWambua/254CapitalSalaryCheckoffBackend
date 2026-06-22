@@ -208,5 +208,5 @@ class ApplicationDocumentsView(APIView):
         # Get documents
         documents = Document.objects.filter(application=application).order_by('document_type', '-created_at')
 
-        serializer = DocumentListSerializer(documents, many=True)
+        serializer = DocumentListSerializer(documents, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
