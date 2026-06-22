@@ -63,9 +63,12 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
         if self.request.user.role == 'admin':
             return queryset
 
-        # HR users see only their employer's clients
-        if self.request.user.role == 'hr':
-            return queryset.filter(employer=self.request.user.employer)
+        # HR users see only their employer's clients (including bulk-uploaded ones)
+        if self.request.user.role == 'hr_manager':
+            hr_profile = getattr(self.request.user, 'hr_profile', None)
+            if not hr_profile or not hr_profile.employer_id:
+                return queryset.none()
+            return queryset.filter(employer=hr_profile.employer)
 
         # Employees should not access this endpoint
         return queryset.none()
@@ -1132,15 +1135,16 @@ def generate_collection_report(request):
             )
 
         # Permission check and employer filter
-        if request.user.role == 'hr':
+        if request.user.role == 'hr_manager':
             # HR users can only see their own employer
-            if not request.user.employer:
+            hr_profile = getattr(request.user, 'hr_profile', None)
+            if not hr_profile or not hr_profile.employer_id:
                 logger.error(f'HR user {request.user.id} not associated with employer')
                 return Response(
                     {'error': 'HR user not associated with an employer'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            employer = request.user.employer
+            employer = hr_profile.employer
             logger.info(f'HR user accessing report for employer: {employer.name} ({employer.id})')
         elif request.user.role == 'admin':
             # Admin must specify employer
@@ -1384,14 +1388,15 @@ def get_collection_report_data(request):
             )
 
         # Permission check and employer filter
-        if request.user.role == 'hr':
-            if not request.user.employer:
+        if request.user.role == 'hr_manager':
+            hr_profile = getattr(request.user, 'hr_profile', None)
+            if not hr_profile or not hr_profile.employer_id:
                 logger.error(f'HR user {request.user.id} not associated with employer')
                 return Response(
                     {'error': 'HR user not associated with an employer'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            employer = request.user.employer
+            employer = hr_profile.employer
             logger.info(f'HR user accessing report data for employer: {employer.name} ({employer.id})')
         elif request.user.role == 'admin':
             if not employer_id:

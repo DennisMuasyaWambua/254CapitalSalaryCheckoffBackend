@@ -1239,8 +1239,10 @@ class AdminDisbursementView(APIView):
         )
 
         # Notify employee of disbursement
-        from apps.notifications.tasks import notify_disbursement
+        from apps.notifications.tasks import notify_disbursement, notify_hr_disbursement
         notify_disbursement.delay(str(app.id))
+        # Notify the employer's HR so payroll deductions can be set up
+        notify_hr_disbursement.delay(str(app.id))
 
         # Log disbursement
         AuditLog.log(
@@ -1604,10 +1606,11 @@ class AdminBulkDisbursementView(APIView):
                 comment=f'Bulk disbursement via {disbursement_method}. Reference: {disbursement_reference}'
             )
 
-            # Notify employee (async)
+            # Notify employee + employer HR (async)
             try:
-                from apps.notifications.tasks import notify_disbursement
+                from apps.notifications.tasks import notify_disbursement, notify_hr_disbursement
                 notify_disbursement.delay(str(loan.id))
+                notify_hr_disbursement.delay(str(loan.id))
             except Exception as e:
                 logger.warning(f'Failed to queue disbursement notification for {loan.id}: {e}')
 
