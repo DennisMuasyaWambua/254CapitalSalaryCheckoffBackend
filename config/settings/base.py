@@ -26,7 +26,7 @@ SECRET_KEY = env('SECRET_KEY', default='django-insecure-change-this-in-productio
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = env('DEBUG')
 
-ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1','254-capital.com', '254-capital.vercel.app', 'api.254-capital.com'])
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1','254-capital.com', '254-capital.vercel.app', 'api.254-capital.com', '254capitalsalarycheckoffbackend-production.up.railway.app'])
 
 # Application definition
 INSTALLED_APPS = [
@@ -147,7 +147,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_DIRS = [BASE_DIR / 'static']
+STATICFILES_DIRS = [BASE_DIR / 'static'] if (BASE_DIR / 'static').exists() else []
 
 # Media files
 MEDIA_URL = 'media/'
@@ -219,7 +219,7 @@ SIMPLE_JWT = {
 # CORS Configuration
 CORS_ALLOWED_ORIGINS = env.list(
     'CORS_ALLOWED_ORIGINS',
-    default=['http://localhost:3000', 'http://127.0.0.1:3000','https://254-capital.com', 'https://254-capital.vercel.app']
+    default=['http://localhost:3000', 'http://127.0.0.1:3000','https://254-capital.com', 'https://254-capital.vercel.app', 'https://254capital-production-c360.up.railway.app']
 )
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
@@ -235,27 +235,58 @@ CORS_ALLOW_HEADERS = [
 ]
 
 # Redis Configuration
-REDIS_URL = env('REDIS_URL', default='redis://localhost:6379/0')
+REDIS_URL = env('REDIS_URL', default=None)
+DJANGO_REDIS_IGNORE_EXCEPTIONS = True  # Global fallback: never let Redis failures crash requests
 
-CACHES = {
-    'default': {
-        'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': REDIS_URL,
-        'OPTIONS': {
-            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-            'CONNECTION_POOL_CLASS_KWARGS': {
-                'max_connections': 50,
-                'retry_on_timeout': True,
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'IGNORE_EXCEPTIONS': True,
+                'CONNECTION_POOL_CLASS_KWARGS': {
+                    'max_connections': 50,
+                    'retry_on_timeout': True,
+                },
             },
+            'KEY_PREFIX': '254capital',
+            'TIMEOUT': 300,
         },
-        'KEY_PREFIX': '254capital',
-        'TIMEOUT': 300,  # 5 minutes default
+        # Auth cache always uses the database so OTPs/sessions survive Redis outages
+        # and are visible to every gunicorn worker. Run createcachetable once.
+        'auth': {
+            'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+            'LOCATION': 'django_cache_table',
+            'TIMEOUT': 300,
+        },
     }
-}
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+            'LOCATION': 'django_cache_table',
+            'TIMEOUT': 300,
+        },
+        'auth': {
+            'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+            'LOCATION': 'django_cache_table',
+            'TIMEOUT': 300,
+        },
+    }
 
 # Celery Configuration
-CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
+CELERY_BROKER_URL = env('CELERY_BROKER_URL', default=REDIS_URL or 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default=REDIS_URL or 'redis://localhost:6379/0')
+# This deployment runs a single web process with no dedicated Celery worker
+# (see start.sh - it only starts gunicorn). Tasks queued to a broker that
+# nothing consumes (e.g. SMS sends) would be silently dropped whenever
+# REDIS_URL is configured, even though a Redis broker is reachable. Always
+# run tasks inline/synchronously unless a real worker is deployed and this
+# is explicitly overridden via env var.
+CELERY_TASK_ALWAYS_EAGER = env.bool('CELERY_TASK_ALWAYS_EAGER', default=True)
+CELERY_TASK_EAGER_PROPAGATES = env.bool('CELERY_TASK_EAGER_PROPAGATES', default=False)
 CELERY_ACCEPT_CONTENT = ['application/json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'

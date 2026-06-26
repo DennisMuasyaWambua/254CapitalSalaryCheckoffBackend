@@ -6,12 +6,99 @@ from celery import shared_task
 from django.conf import settings
 from .models import Notification
 from .sms import send_sms
+from common.email_service import send_email
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=3)
+# 254 Capital is always copied on HR notifications so the lender retains a record.
+CC_254_CAPITAL = 'david.muema@254-capital.com'
+
+
+def _hr_recipients_for_employer(employer):
+    """
+    Resolve the email recipients for an employer's HR.
+
+    Returns a list of (email, display_name) tuples. Prefers active HR user
+    accounts linked to the employer; falls back to the employer's onboarding
+    HR contact email when no HR user account exists. Returns an empty list if
+    no recipient can be determined (caller should log a warning, not crash).
+    """
+    from apps.accounts.models import CustomUser
+
+    recipients = []
+    try:
+        hr_users = CustomUser.objects.filter(
+            role=CustomUser.Role.HR_MANAGER,
+            hr_profile__employer=employer,
+            is_active=True,
+        )
+        recipients = [
+            (u.email, u.get_full_name() or 'HR Manager')
+            for u in hr_users if u.email
+        ]
+    except Exception as e:
+        logger.error(f'Failed to resolve HR users for employer {getattr(employer, "id", "?")}: {e}')
+
+    # Fall back to the employer's onboarding HR contact when no HR account exists.
+    if not recipients and getattr(employer, 'hr_contact_email', None):
+        recipients = [(employer.hr_contact_email, employer.hr_contact_name or 'HR Team')]
+
+    return recipients
+
+
+def _hr_email_html(header_color, title, greeting_name, intro_html, detail_rows, footer_html=''):
+    """
+    Build an HR notification email using the same layout/styling as the rest of
+    common.email_service (header / content / footer with inline styles).
+
+    detail_rows: list of (label, value) tuples rendered as a bordered table.
+    """
+    rows = ''.join(
+        f'<li style="margin-bottom:6px;"><strong>{label}:</strong> {value}</li>'
+        for label, value in detail_rows
+    )
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+            .header {{ background-color: {header_color}; color: white; padding: 20px; text-align: center; }}
+            .content {{ padding: 20px; background-color: #f9f9f9; }}
+            .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #666; }}
+            .details {{ background-color: #ffffff; border: 1px solid #e0e0e0; border-radius: 5px; padding: 15px 20px; margin: 15px 0; }}
+            .details ul {{ list-style: none; padding: 0; margin: 0; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>{title}</h1>
+            </div>
+            <div class="content">
+                <h2>Hello {greeting_name},</h2>
+                {intro_html}
+                <div class="details">
+                    <ul>{rows}</ul>
+                </div>
+                {footer_html}
+                <p>Best regards,<br><strong>254 Capital Team</strong></p>
+            </div>
+            <div class="footer">
+                <p>&copy; 2026 254 Capital. All rights reserved.</p>
+                <p>This is an automated notification. Please do not reply to this email.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+
+@shared_task(bind=True, max_retries=2)
 def send_otp_sms(self, phone_number: str, otp_code: str):
     """
     Send OTP SMS to phone number.
@@ -20,26 +107,31 @@ def send_otp_sms(self, phone_number: str, otp_code: str):
         phone_number: Recipient phone number
         otp_code: 6-digit OTP code
     """
+    message = (
+        f'Your 254 Capital verification code is {otp_code}. '
+        f'Valid for 5 minutes. Do not share this code with anyone.'
+    )
+
     try:
-        message = (
-            f'Your 254 Capital verification code is {otp_code}. '
-            f'Valid for 5 minutes. Do not share this code with anyone.'
-        )
-
         result = send_sms(phone_number, message)
-
-        if not result['success']:
-            logger.error(f'OTP SMS failed for {phone_number}: {result.get("error")}')
-            # Retry on failure
-            raise Exception(result.get('error', 'SMS send failed'))
-
-        logger.info(f'OTP SMS sent to {phone_number}')
-        return result
-
     except Exception as e:
-        logger.error(f'OTP SMS task failed: {str(e)}')
-        # Retry with exponential backoff
-        raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
+        logger.error(f'OTP SMS exception for {phone_number}: {e}')
+        # Don't retry in eager (sync) mode — it would block the request
+        if not self.request.called_directly:
+            raise self.retry(exc=e, countdown=30 * (2 ** self.request.retries))
+        return {'success': False, 'error': str(e)}
+
+    if not result['success']:
+        logger.error(f'OTP SMS failed for {phone_number}: {result.get("error")}')
+        if not self.request.called_directly:
+            raise self.retry(
+                exc=Exception(result.get('error', 'SMS send failed')),
+                countdown=30 * (2 ** self.request.retries)
+            )
+    else:
+        logger.info(f'OTP SMS sent to {phone_number}')
+
+    return result
 
 
 @shared_task
@@ -106,10 +198,135 @@ def notify_hr_new_application(application_id: str):
                 notification_type=Notification.NotificationType.STATUS_UPDATE
             )
 
-        logger.info(f'HR notifications sent for application {application_id}')
+        logger.info(f'HR in-app notifications created for application {application_id}')
+
+        # Trigger 1: Email the relevant HR user(s) that an application needs sign-off.
+        recipients = _hr_recipients_for_employer(app.employer)
+        if not recipients:
+            logger.warning(
+                f'No HR recipient found for employer {app.employer_id} '
+                f'(application {app.application_number}). Skipping HR email.'
+            )
+            return
+
+        employee_name = app.employee.get_full_name()
+        application_date = app.created_at.strftime('%d %B %Y') if app.created_at else 'N/A'
+        subject = f'[Action Required] New Loan Application - {employee_name} ({app.application_number})'
+
+        for email, name in recipients:
+            body_html = _hr_email_html(
+                header_color='#2c3e50',
+                title='New Loan Application',
+                greeting_name=name,
+                intro_html='<p>A new loan application has been submitted and requires your review and approval.</p>',
+                detail_rows=[
+                    ('Employee', employee_name),
+                    ('Loan Amount Requested', f'KES {app.principal_amount:,.2f}'),
+                    ('Application Date', application_date),
+                    ('Application Number', app.application_number),
+                ],
+                footer_html=(
+                    '<p style="background-color:#fff3cd;border-left:4px solid #ffc107;'
+                    'padding:10px;border-radius:3px;">'
+                    '<strong>Action required:</strong> Please log in to the HR portal to '
+                    'review and approve this application.</p>'
+                ),
+            )
+            result = send_email(email, subject, body_html, cc_address=CC_254_CAPITAL)
+            if result.get('success'):
+                logger.info(f'New-application HR email sent to {email} for {app.application_number}')
+            else:
+                logger.error(
+                    f'Failed to send new-application HR email to {email} '
+                    f'for {app.application_number}: {result.get("error")}'
+                )
 
     except Exception as e:
         logger.error(f'Failed to send HR notifications: {str(e)}')
+
+
+@shared_task
+def notify_hr_disbursement(application_id: str):
+    """
+    Trigger 2: Notify the relevant HR user(s) by email when a loan is disbursed,
+    so payroll deductions can be set up.
+
+    Includes employee name, amount disbursed, disbursement date, monthly
+    installment, tenure, and a payroll-deduction start note applying the
+    15th-day rule (disbursed on/before the 15th -> deductions start the same
+    month; after the 15th -> the following month).
+
+    Args:
+        application_id: UUID of loan application
+    """
+    try:
+        from apps.loans.models import LoanApplication
+
+        app = LoanApplication.objects.select_related('employee', 'employer').get(id=application_id)
+
+        recipients = _hr_recipients_for_employer(app.employer)
+        if not recipients:
+            logger.warning(
+                f'No HR recipient found for employer {app.employer_id} '
+                f'(application {app.application_number}). Skipping HR disbursement email.'
+            )
+            return
+
+        employee_name = app.employee.get_full_name()
+        disbursement_date_str = app.disbursement_date.strftime('%d %B %Y') if app.disbursement_date else 'N/A'
+
+        # Build the payroll deduction-start note from the 15th-day rule.
+        if app.first_deduction_date:
+            start_month = app.first_deduction_date.strftime('%B %Y')
+            if app.disbursement_date and app.disbursement_date.day <= 15:
+                rule_note = 'disbursed on or before the 15th'
+            else:
+                rule_note = 'disbursed after the 15th'
+            deduction_note = (
+                f'<p style="background-color:#e8f5e9;border-left:4px solid #27ae60;'
+                f'padding:10px;border-radius:3px;">'
+                f'<strong>Payroll deductions should commence from {start_month}</strong> '
+                f'({rule_note}). The first deduction falls due on '
+                f'{app.first_deduction_date.strftime("%d %B %Y")}.</p>'
+            )
+        else:
+            deduction_note = (
+                '<p>Please set up payroll deductions for this employee per the '
+                'agreed check-off schedule.</p>'
+            )
+
+        subject = f'Loan Disbursed - {employee_name} ({app.application_number})'
+
+        for email, name in recipients:
+            body_html = _hr_email_html(
+                header_color='#27ae60',
+                title='Loan Disbursed',
+                greeting_name=name,
+                intro_html=(
+                    '<p>A loan has been disbursed to one of your employees. '
+                    'Please note the following details for payroll processing.</p>'
+                ),
+                detail_rows=[
+                    ('Employee', employee_name),
+                    ('Loan Amount Disbursed', f'KES {app.principal_amount:,.2f}'),
+                    ('Disbursement Date', disbursement_date_str),
+                    ('Monthly Installment', f'KES {app.monthly_deduction:,.2f}'),
+                    ('Loan Tenure', f'{app.repayment_months} months'),
+                    ('Application Number', app.application_number),
+                ],
+                footer_html=deduction_note,
+            )
+            result = send_email(email, subject, body_html, cc_address=CC_254_CAPITAL)
+            if result.get('success'):
+                logger.info(f'Disbursement HR email sent to {email} for {app.application_number}')
+            else:
+                logger.error(
+                    f'Failed to send disbursement HR email to {email} '
+                    f'for {app.application_number}: {result.get("error")}'
+                )
+
+    except Exception as e:
+        logger.error(f'Failed to send HR disbursement notification: {str(e)}')
 
 
 @shared_task

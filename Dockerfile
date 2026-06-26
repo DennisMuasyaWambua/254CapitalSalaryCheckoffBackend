@@ -39,8 +39,11 @@ RUN python manage.py collectstatic --noinput --settings=config.settings.producti
 # Create media directory
 RUN mkdir -p /app/media
 
+# Make start script executable
+RUN chmod +x /app/start.sh
+
 # Expose port
 EXPOSE 8000
 
-# Run gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--timeout", "120", "config.wsgi:application"]
+# Run startup script (runs migrations then gunicorn)
+CMD ["/app/start.sh"]

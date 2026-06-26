@@ -172,6 +172,125 @@ def calculate_amortized(
     }
 
 
+def calculate_reducing_balance(
+    principal: Decimal,
+    monthly_rate: Decimal = Decimal('0.05'),
+    months: int = 6
+) -> Dict[str, any]:
+    """
+    Calculate loan repayment using reducing balance (EMI) method.
+
+    The interest is calculated on the outstanding principal balance each month.
+    Equal monthly installments with varying interest/principal split.
+
+    Formula (EMI):
+        EMI = P × r × (1+r)^n / ((1+r)^n - 1)
+        where P = principal, r = monthly interest rate, n = tenure in months
+
+    Args:
+        principal: Loan principal amount
+        monthly_rate: Monthly interest rate (default: 0.05 = 5% per month)
+        months: Repayment period in months
+
+    Returns:
+        Dict with:
+            - total_repayment: Total amount to be repaid
+            - monthly_deduction: Monthly EMI amount
+            - interest_amount: Total interest amount
+            - interest_rate: Monthly interest rate used
+            - schedule: List of dicts with installment breakdown
+
+    Example:
+        >>> calculate_reducing_balance(Decimal('100000'), Decimal('0.05'), 6)
+        {
+            'total_repayment': Decimal('117684.00'),
+            'monthly_deduction': Decimal('19614.00'),
+            'interest_amount': Decimal('17684.00'),
+            'interest_rate': Decimal('0.05'),
+            'schedule': [...]
+        }
+    """
+    principal = Decimal(str(principal))
+    r = Decimal(str(monthly_rate))
+    n = months
+
+    # EMI formula: P × r × (1+r)^n / ((1+r)^n - 1)
+    if r > 0:
+        one_plus_r_n = (Decimal('1') + r) ** n
+        numerator = principal * r * one_plus_r_n
+        denominator = one_plus_r_n - Decimal('1')
+        emi = numerator / denominator
+    else:
+        # If rate is 0, simple division
+        emi = principal / Decimal(str(n))
+
+    emi = emi.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+    # Generate amortization schedule
+    schedule = []
+    outstanding_principal = principal
+
+    for i in range(1, n + 1):
+        interest_portion = outstanding_principal * r
+        interest_portion = interest_portion.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+        principal_portion = emi - interest_portion
+        outstanding_principal = outstanding_principal - principal_portion
+
+        # Adjust last payment to handle rounding
+        if i == n:
+            principal_portion = principal_portion + outstanding_principal
+            outstanding_principal = Decimal('0.00')
+
+        schedule.append({
+            'installment': i,
+            'amount': emi,
+            'principal_portion': principal_portion.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+            'interest_portion': interest_portion,
+            'running_balance': max(Decimal('0.00'), outstanding_principal).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+        })
+
+    total_repayment = emi * Decimal(str(n))
+    interest_amount = total_repayment - principal
+
+    return {
+        'total_repayment': total_repayment.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+        'monthly_deduction': emi,
+        'interest_amount': interest_amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+        'interest_rate': r,
+        'schedule': schedule,
+    }
+
+
+def calculate_loan_for_employer(
+    principal: Decimal,
+    months: int,
+    interest_method: str = 'flat',
+    monthly_rate: Decimal = Decimal('0.05')
+) -> Dict[str, any]:
+    """
+    Calculate loan based on employer's interest method.
+
+    This is the primary function to use when calculating loans, as it
+    automatically selects the correct calculation method based on the
+    employer's configuration.
+
+    Args:
+        principal: Loan principal amount
+        months: Repayment period in months
+        interest_method: 'flat' or 'reducing_balance'
+        monthly_rate: Monthly interest rate (default: 0.05 = 5% per month)
+
+    Returns:
+        Dict with calculation results (format varies slightly by method)
+    """
+    if interest_method == 'reducing_balance':
+        return calculate_reducing_balance(principal, monthly_rate, months)
+    else:
+        # Default to flat rate
+        return calculate_flat_interest(principal, monthly_rate, months)
+
+
 def calculate_first_deduction_date(disbursement_date: date) -> date:
     """
     Calculate the first deduction date based on disbursement date.

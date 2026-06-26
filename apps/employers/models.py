@@ -36,6 +36,25 @@ class Employer(models.Model):
         help_text='Day of month when payroll is processed (default: 25th)'
     )
 
+    # Interest calculation method and rate
+    INTEREST_METHOD_CHOICES = [
+        ('flat', 'Flat Rate'),
+        ('reducing_balance', 'Reducing Balance'),
+    ]
+    interest_method = models.CharField(
+        max_length=20,
+        choices=INTEREST_METHOD_CHOICES,
+        default='flat',
+        help_text='Interest calculation method: flat (default) or reducing_balance (EMI)'
+    )
+    interest_rate = models.DecimalField(
+        max_digits=5,
+        decimal_places=4,
+        default=0.05,
+        validators=[MinValueValidator(0.0001), MaxValueValidator(1.0)],
+        help_text='Monthly interest rate as decimal (e.g., 0.05 for 5%). Range: 0.01% to 100%'
+    )
+
     # HR contact information
     hr_contact_name = models.CharField(max_length=255)
     hr_contact_email = models.EmailField()

@@ -278,8 +278,8 @@ class HRLoginSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         """Validate credentials and role."""
-        email = attrs.get('email')
-        password = attrs.get('password')
+        email = attrs.get('email', '').strip()
+        password = attrs.get('password', '').strip()
 
         # Authenticate
         user = authenticate(username=email, password=password)
@@ -305,8 +305,8 @@ class AdminLoginSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         """Validate credentials and role."""
-        email = attrs.get('email')
-        password = attrs.get('password')
+        email = attrs.get('email', '').strip()
+        password = attrs.get('password', '').strip()
 
         # Authenticate
         user = authenticate(username=email, password=password)

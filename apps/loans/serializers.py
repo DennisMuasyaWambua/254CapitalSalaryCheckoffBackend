@@ -280,13 +280,19 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
                 )
 
             # Import here to avoid circular import
-            from .services import calculate_flat_interest, calculate_loan_affordability
+            from .services import calculate_loan_for_employer, calculate_loan_affordability
 
-            # Calculate monthly deduction
-            calc = calculate_flat_interest(
+            # Get employer's interest method and rate
+            employer = employee_profile.employer
+            interest_method = getattr(employer, 'interest_method', 'flat') if employer else 'flat'
+            interest_rate = getattr(employer, 'interest_rate', Decimal(str(settings.LOAN_INTEREST_RATE_FLAT))) if employer else Decimal(str(settings.LOAN_INTEREST_RATE_FLAT))
+
+            # Calculate monthly deduction using employer's interest method and rate
+            calc = calculate_loan_for_employer(
                 attrs['principal_amount'],
-                Decimal(str(settings.LOAN_INTEREST_RATE_FLAT)),
-                attrs['repayment_months']
+                attrs['repayment_months'],
+                interest_method,
+                Decimal(str(interest_rate))
             )
 
             # Check affordability
@@ -319,7 +325,7 @@ class LoanCalculatorSerializer(serializers.Serializer):
     )
     months = serializers.ChoiceField(choices=settings.LOAN_REPAYMENT_TERMS)
     calculation_type = serializers.ChoiceField(
-        choices=['flat', 'amortized'],
+        choices=['flat', 'reducing_balance', 'amortized'],
         default='flat'
     )
     annual_rate = serializers.DecimalField(
@@ -328,6 +334,8 @@ class LoanCalculatorSerializer(serializers.Serializer):
         required=False,
         default=Decimal(str(settings.LOAN_INTEREST_RATE_FLAT))
     )
+    # Optional: employer_id to automatically use employer's interest method
+    employer_id = serializers.UUIDField(required=False, allow_null=True)
 
 
 class HRReviewSerializer(serializers.Serializer):
@@ -431,18 +439,23 @@ class LoanApplicationUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         """Update application and recalculate repayment."""
         # Import here to avoid circular import
-        from .services import calculate_flat_interest
+        from .services import calculate_loan_for_employer
 
         # Update fields
         instance.principal_amount = validated_data.get('principal_amount', instance.principal_amount)
         instance.repayment_months = validated_data.get('repayment_months', instance.repayment_months)
         instance.purpose = validated_data.get('purpose', instance.purpose)
 
-        # Recalculate repayment
-        calc = calculate_flat_interest(
+        # Get employer's interest method
+        employer = instance.employer
+        interest_method = getattr(employer, 'interest_method', 'flat') if employer else 'flat'
+
+        # Recalculate repayment using employer's interest method
+        calc = calculate_loan_for_employer(
             instance.principal_amount,
-            instance.interest_rate,
-            instance.repayment_months
+            instance.repayment_months,
+            interest_method,
+            instance.interest_rate
         )
         instance.total_repayment = calc['total_repayment']
         instance.monthly_deduction = calc['monthly_deduction']
