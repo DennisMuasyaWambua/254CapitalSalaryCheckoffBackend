@@ -11,4 +11,5 @@ urlpatterns = [
     path('upload/', views.DocumentUploadView.as_view(), name='document-upload'),
     path('<uuid:pk>/', views.DocumentDetailView.as_view(), name='document-detail'),
     path('application/<uuid:application_id>/', views.ApplicationDocumentsView.as_view(), name='application-documents'),
+    path('employer/<uuid:employer_id>/', views.EmployerDocumentsView.as_view(), name='employer-documents'),
 ]
