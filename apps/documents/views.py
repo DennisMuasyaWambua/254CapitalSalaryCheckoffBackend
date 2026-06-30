@@ -81,7 +81,8 @@ class DocumentDetailView(APIView):
         try:
             doc = Document.objects.select_related('application', 'employer', 'uploaded_by').get(pk=pk)
 
-            # Check access based on role
+            # Check access based on role. Default is DENY: only roles with an
+            # explicit allow rule below can reach the document.
             if user.role == 'employee':
                 # Employee can access own application documents
                 if doc.application and doc.application.employee != user:
@@ -89,8 +90,9 @@ class DocumentDetailView(APIView):
                 # Or documents they uploaded
                 if doc.uploaded_by != user:
                     return None
+                return doc
 
-            elif user.role == 'hr_manager':
+            if user.role == 'hr_manager':
                 # HR can access documents from their employer
                 hr_profile = getattr(user, 'hr_profile', None)
                 if not hr_profile:
@@ -101,9 +103,14 @@ class DocumentDetailView(APIView):
                     return None
                 if doc.employer and doc.employer != hr_profile.employer:
                     return None
+                return doc
 
-            # Admin can access all
-            return doc
+            if user.role == 'admin':
+                # Admin (254 Capital staff) can access all documents.
+                return doc
+
+            # Any unrecognised role is denied by default.
+            return None
 
         except Document.DoesNotExist:
             return None
@@ -207,6 +214,54 @@ class ApplicationDocumentsView(APIView):
 
         # Get documents
         documents = Document.objects.filter(application=application).order_by('document_type', '-created_at')
+
+        serializer = DocumentListSerializer(documents, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class EmployerDocumentsView(APIView):
+    """
+    GET /api/v1/documents/employer/<uuid:employer_id>/
+    List all employer-level documents (e.g. check-off agreements) for an employer.
+
+    Access:
+      - admin       : any employer
+      - hr_manager  : only their own employer
+      - employee    : denied
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, employer_id):
+        """List documents for an employer."""
+        from apps.employers.models import Employer
+
+        try:
+            employer = Employer.objects.get(pk=employer_id)
+        except Employer.DoesNotExist:
+            return Response(
+                {'detail': 'Employer not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check access
+        if request.user.role == 'admin':
+            pass  # Admin can access any employer's documents.
+        elif request.user.role == 'hr_manager':
+            hr_profile = getattr(request.user, 'hr_profile', None)
+            if not hr_profile or employer != hr_profile.employer:
+                return Response(
+                    {'detail': 'You do not have access to this employer.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        else:
+            # Employees (and any other role) are not permitted.
+            return Response(
+                {'detail': 'You do not have access to this employer.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        documents = Document.objects.filter(employer=employer).order_by('document_type', '-created_at')
 
         serializer = DocumentListSerializer(documents, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)

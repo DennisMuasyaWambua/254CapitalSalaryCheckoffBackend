@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.db import transaction
 from django.db.models import Q, Count, Sum
 from django.utils import timezone
 from decimal import Decimal
@@ -36,6 +37,7 @@ from common.pagination import StandardPagination
 from common.utils import get_client_ip
 from common.email_service import send_email, send_internal_alert
 from apps.audit.models import AuditLog
+from apps.documents.serializers import DocumentUploadSerializer
 import logging
 
 logger = logging.getLogger(__name__)
@@ -100,36 +102,73 @@ class LoanApplicationListCreateView(APIView):
             Decimal(str(interest_rate))  # Use employer's interest rate
         )
 
+        # Supporting documents are mandatory. Validate their presence BEFORE
+        # creating anything so an application is never submitted without them.
+        # Optional extra payslips (payslip_2, payslip_3) are accepted if sent.
+        files = request.FILES
+        required_docs = ['national_id_front', 'national_id_back', 'payslip_1']
+        optional_docs = ['payslip_2', 'payslip_3']
+        missing = [key for key in required_docs if key not in files]
+        if missing:
+            return Response(
+                {'detail': (
+                    'Required documents are missing. Please attach National ID '
+                    '(front and back) and at least one payslip before submitting.'
+                ), 'missing_documents': missing},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Generate application number
         app_number = generate_application_number()
 
-        # Create application
-        loan = LoanApplication.objects.create(
-            application_number=app_number,
-            employee=request.user,
-            employer=employee_profile.employer,
-            principal_amount=serializer.validated_data['principal_amount'],
-            repayment_months=serializer.validated_data['repayment_months'],
-            disbursement_method=serializer.validated_data['disbursement_method'],
-            purpose=serializer.validated_data.get('purpose', ''),
-            total_repayment=calc['total_repayment'],
-            monthly_deduction=calc['monthly_deduction'],
-            status=LoanApplication.Status.SUBMITTED,
-            terms_accepted=serializer.validated_data['terms_accepted'],
-            terms_accepted_at=timezone.now() if serializer.validated_data['terms_accepted'] else None,
-            # Bank details for disbursement
-            bank_name=serializer.validated_data.get('bank_name', ''),
-            bank_branch=serializer.validated_data.get('bank_branch', ''),
-            account_number=serializer.validated_data.get('account_number', ''),
-        )
+        # Create the application and all its documents atomically. If any
+        # document fails validation/save, the whole transaction rolls back and
+        # no application is persisted — the submission does not go through.
+        with transaction.atomic():
+            loan = LoanApplication.objects.create(
+                application_number=app_number,
+                employee=request.user,
+                employer=employee_profile.employer,
+                principal_amount=serializer.validated_data['principal_amount'],
+                repayment_months=serializer.validated_data['repayment_months'],
+                disbursement_method=serializer.validated_data['disbursement_method'],
+                purpose=serializer.validated_data.get('purpose', ''),
+                total_repayment=calc['total_repayment'],
+                monthly_deduction=calc['monthly_deduction'],
+                status=LoanApplication.Status.SUBMITTED,
+                terms_accepted=serializer.validated_data['terms_accepted'],
+                terms_accepted_at=timezone.now() if serializer.validated_data['terms_accepted'] else None,
+                # Bank details for disbursement
+                bank_name=serializer.validated_data.get('bank_name', ''),
+                bank_branch=serializer.validated_data.get('bank_branch', ''),
+                account_number=serializer.validated_data.get('account_number', ''),
+            )
 
-        # Create initial status history
-        LoanStatusHistory.objects.create(
-            application=loan,
-            status=LoanApplication.Status.SUBMITTED,
-            actor=request.user,
-            comment='Application submitted'
-        )
+            # Create initial status history
+            LoanStatusHistory.objects.create(
+                application=loan,
+                status=LoanApplication.Status.SUBMITTED,
+                actor=request.user,
+                comment='Application submitted'
+            )
+
+            # Attach each supplied document, linked to this application. Reuse
+            # the document upload serializer so the same validation (type, size,
+            # mime) applies. A failure here aborts the whole submission.
+            for doc_type in required_docs + optional_docs:
+                uploaded = files.get(doc_type)
+                if not uploaded:
+                    continue
+                doc_serializer = DocumentUploadSerializer(
+                    data={
+                        'file': uploaded,
+                        'document_type': doc_type,
+                        'application_id': str(loan.id),
+                    },
+                    context={'request': request}
+                )
+                doc_serializer.is_valid(raise_exception=True)
+                doc_serializer.save()
 
         # Trigger notification to HR (async)
         from apps.notifications.tasks import notify_hr_new_application
