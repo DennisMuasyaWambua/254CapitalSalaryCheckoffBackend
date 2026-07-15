@@ -110,24 +110,35 @@ jobs:
             echo "🚀 Starting new containers..."
             docker-compose up -d
 
-            # Run migrations
-            echo "📊 Running database migrations..."
-            docker-compose exec -T web python manage.py migrate --noinput
+            # NOTE: no `docker-compose exec` steps here on purpose. Migrations
+            # (and createcachetable) run inside the web container at boot via
+            # start.sh, and collectstatic runs at image build in the Dockerfile.
+            # Running them again via exec spawned two extra full-Django
+            # processes while every container was still cold-booting, which
+            # OOM-killed the deploy session on this ~2GB instance (exit 137).
 
-            # Collect static files
-            echo "📁 Collecting static files..."
-            docker-compose exec -T web python manage.py collectstatic --noinput
-
-            # Check health
+            # Check health. Retry loop instead of a fixed sleep: the web
+            # container runs migrations before gunicorn starts listening, so
+            # readiness can take a while after `up -d`.
             echo "🏥 Checking application health..."
-            sleep 10
-            if curl -f -L http://localhost:8000/admin/ > /dev/null 2>&1; then
-              echo "✅ Deployment successful!"
-            else
-              echo "❌ Health check failed!"
+            healthy=false
+            for i in $(seq 1 30); do
+              if curl -f -L http://localhost:8000/admin/ > /dev/null 2>&1; then
+                healthy=true
+                break
+              fi
+              sleep 5
+            done
+
+            if [ "$healthy" != "true" ]; then
+              echo "❌ Health check failed after 150s!"
               docker-compose logs web
               exit 1
             fi
+
+            echo "✅ Health check passed."
+            echo "📊 Migrations applied during container boot:"
+            docker-compose logs web 2>/dev/null | grep -iE "Applying |No migrations" | tail -20 || true
 
             echo "🎉 Deployment completed successfully!"
 
