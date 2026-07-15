@@ -51,3 +51,5 @@ htmlcov/
 *.backup
 *.sql
 *.dump
+local_dev.sqlite3
+local_media/

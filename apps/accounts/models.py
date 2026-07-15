@@ -157,6 +157,11 @@ class EmployeeProfile(models.Model):
         blank=True,
         help_text='Contract end date for contract employees'
     )
+    employment_start_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Date the employee joined the employer'
+    )
 
     # Contact information
     work_email = models.EmailField(

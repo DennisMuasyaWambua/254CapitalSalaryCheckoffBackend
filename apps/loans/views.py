@@ -530,13 +530,15 @@ class HRAllApplicationsView(APIView):
         if status_filter:
             applications = applications.filter(status=status_filter)
 
-        # Apply date range filter
+        # Apply date range filter. Compare on the date part so a to_date of
+        # "2026-07-15" includes applications made during that day (a plain
+        # __lte would compare against midnight and exclude them).
         from_date = request.query_params.get('from_date')
         to_date = request.query_params.get('to_date')
         if from_date:
-            applications = applications.filter(created_at__gte=from_date)
+            applications = applications.filter(created_at__date__gte=from_date)
         if to_date:
-            applications = applications.filter(created_at__lte=to_date)
+            applications = applications.filter(created_at__date__lte=to_date)
 
         # Apply search
         search = request.query_params.get('search', '').strip()

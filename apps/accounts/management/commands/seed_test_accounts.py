@@ -83,6 +83,7 @@ class Command(BaseCommand):
                 'employee_id': 'EMP-TEST-001',
                 'department': 'Operations',
                 'employment_type': EmployeeProfile.EmploymentType.CONFIRMED,
+                'employment_start_date': '2024-01-15',
                 'monthly_gross_salary': Decimal('120000.00'),
                 'bank_name': 'KCB Bank',
                 'bank_branch': 'Nairobi',
@@ -93,6 +94,7 @@ class Command(BaseCommand):
         EmployeeProfile.objects.filter(user=employee).update(
             employer=employer,
             employment_type=EmployeeProfile.EmploymentType.CONFIRMED,
+            employment_start_date='2024-01-15',
         )
 
         self.stdout.write(self.style.SUCCESS('\n✅ Test accounts ready (password for all: %s)\n' % PASSWORD))

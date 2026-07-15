@@ -77,6 +77,12 @@ def store_otp(phone_number: str, otp: str, ttl: Optional[int] = None) -> dict:
 
     logger.info(f'OTP stored for {mask_phone_number(phone_number)}, expires in {ttl}s')
 
+    # Local testing: only the SHA-256 hash is persisted, so when SMS delivery
+    # is unavailable there is no way to recover the code. Never runs in
+    # production (DEBUG is False there).
+    if settings.DEBUG:
+        logger.warning(f'[DEV ONLY] OTP for {mask_phone_number(phone_number)}: {otp}')
+
     return {
         'masked_phone': mask_phone_number(phone_number),
         'expires_in': ttl,

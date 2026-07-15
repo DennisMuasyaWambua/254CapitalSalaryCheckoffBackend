@@ -25,7 +25,8 @@ class EmployeeProfileSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'employer', 'employer_name', 'employer_id_display',
             'employee_id', 'department', 'employment_type', 'employment_type_display',
-            'contract_end_date', 'work_email', 'personal_email', 'residential_location',
+            'contract_end_date', 'employment_start_date',
+            'work_email', 'personal_email', 'residential_location',
             'monthly_gross_salary', 'bank_name', 'bank_account_number', 'mpesa_number',
             'is_loan_eligible', 'days_until_contract_expiry',
             'created_at', 'updated_at'
@@ -142,6 +143,7 @@ class RegisterEmployeeSerializer(serializers.Serializer):
         default=EmployeeProfile.EmploymentType.CONFIRMED
     )
     contract_end_date = serializers.DateField(required=False, allow_null=True)
+    employment_start_date = serializers.DateField(required=False, allow_null=True)
     work_email = serializers.EmailField(required=False, allow_blank=True)
     personal_email = serializers.EmailField(required=False, allow_blank=True)
     residential_location = serializers.CharField(max_length=255, required=False, allow_blank=True)
@@ -230,6 +232,7 @@ class RegisterEmployeeSerializer(serializers.Serializer):
         department = validated_data.pop('department', '')
         employment_type = validated_data.pop('employment_type', EmployeeProfile.EmploymentType.CONFIRMED)
         contract_end_date = validated_data.pop('contract_end_date', None)
+        employment_start_date = validated_data.pop('employment_start_date', None)
         work_email = validated_data.pop('work_email', '')
         personal_email = validated_data.pop('personal_email', '')
         residential_location = validated_data.pop('residential_location', '')
@@ -258,6 +261,7 @@ class RegisterEmployeeSerializer(serializers.Serializer):
             department=department,
             employment_type=employment_type,
             contract_end_date=contract_end_date,
+            employment_start_date=employment_start_date,
             work_email=work_email,
             personal_email=personal_email,
             residential_location=residential_location,
