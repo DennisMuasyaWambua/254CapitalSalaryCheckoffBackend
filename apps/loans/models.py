@@ -19,6 +19,11 @@ class LoanApplication(models.Model):
 
     class Status(models.TextChoices):
         SUBMITTED = 'submitted', 'Submitted'
+        # HR approved, awaiting 254 Capital credit assessment. Set by the HR
+        # review views; the admin assessment queue accepts it alongside
+        # 'submitted'. (Removed in an earlier cleanup while the HR review
+        # views still assigned it, which made every HR approval crash.)
+        UNDER_REVIEW_ADMIN = 'under_review_admin', 'Under 254 Capital Review'
         APPROVED = 'approved', 'Approved'
         DECLINED = 'declined', 'Declined'
         DISBURSED = 'disbursed', 'Disbursed'
@@ -183,7 +188,7 @@ class LoanApplication(models.Model):
     @property
     def can_be_reviewed_by_admin(self):
         """Check if application is ready for admin credit assessment."""
-        return self.status == self.Status.SUBMITTED
+        return self.status in (self.Status.SUBMITTED, self.Status.UNDER_REVIEW_ADMIN)
 
     @property
     def can_be_disbursed(self):
