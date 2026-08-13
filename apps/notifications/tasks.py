@@ -134,6 +134,57 @@ def send_otp_sms(self, phone_number: str, otp_code: str):
     return result
 
 
+@shared_task(bind=True, max_retries=2)
+def send_otp_email(self, email: str, otp_code: str, user_name: str = ''):
+    """
+    Send OTP verification code to an email address.
+
+    Used alongside send_otp_sms so employees receive their login code on the
+    email their account was created with, in addition to SMS.
+
+    Args:
+        email: Recipient email address
+        otp_code: 6-digit OTP code
+        user_name: Optional recipient display name for the greeting
+    """
+    greeting_name = user_name or 'there'
+    intro_html = (
+        '<p>Use the verification code below to complete your 254 Capital login. '
+        'The code is valid for 5 minutes.</p>'
+        f'<p style="font-size:28px; font-weight:bold; letter-spacing:6px; '
+        f'color:#0a3d62; text-align:center; margin:20px 0;">{otp_code}</p>'
+        '<p>If you did not request this code, please ignore this email and do '
+        'not share the code with anyone.</p>'
+    )
+    body_html = _hr_email_html(
+        header_color='#0a3d62',
+        title='Your Verification Code',
+        greeting_name=greeting_name,
+        intro_html=intro_html,
+        detail_rows=[('Valid for', '5 minutes')],
+    )
+
+    try:
+        result = send_email(email, 'Your 254 Capital verification code', body_html)
+    except Exception as e:
+        logger.error(f'OTP email exception for {email}: {e}')
+        if not self.request.called_directly:
+            raise self.retry(exc=e, countdown=30 * (2 ** self.request.retries))
+        return {'success': False, 'error': str(e)}
+
+    if not result.get('success'):
+        logger.error(f'OTP email failed for {email}: {result.get("error")}')
+        if not self.request.called_directly:
+            raise self.retry(
+                exc=Exception(result.get('error', 'Email send failed')),
+                countdown=30 * (2 ** self.request.retries)
+            )
+    else:
+        logger.info(f'OTP email sent to {email}')
+
+    return result
+
+
 @shared_task
 def notify_application_submitted(application_id: str):
     """

@@ -118,6 +118,28 @@ def mask_phone_number(phone_number: str) -> str:
         return '***'
 
 
+def mask_email(email: str) -> str:
+    """
+    Mask an email address for display.
+
+    Example: employee@example.com -> e****e@example.com
+
+    Args:
+        email: Email address to mask
+
+    Returns:
+        Masked email address
+    """
+    if not email or '@' not in email:
+        return '***'
+    local, domain = email.rsplit('@', 1)
+    if len(local) <= 2:
+        masked_local = f'{local[0]}*' if local else '*'
+    else:
+        masked_local = f'{local[0]}****{local[-1]}'
+    return f'{masked_local}@{domain}'
+
+
 def validate_national_id(national_id: str) -> bool:
     """
     Validate Kenyan National ID format.

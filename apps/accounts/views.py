@@ -28,13 +28,49 @@ from .serializers import (
 from .otp import generate_otp, store_otp, verify_otp, can_request_new_otp
 from .models import CustomUser, PasswordResetToken
 from common.throttling import OTPRateThrottle
-from common.utils import get_client_ip
+from common.utils import get_client_ip, mask_email
 from common.email_service import send_welcome_email, send_internal_alert, send_password_reset_email
 from apps.audit.models import AuditLog
 import secrets
 from datetime import timedelta
 
 logger = logging.getLogger(__name__)
+
+
+def _dispatch_otp_email(user, otp_code, context_label):
+    """
+    Send the login OTP to a user's email, if the user has one on file.
+
+    Shared by the employee, HR, and admin login flows so every profile receives
+    the same code by email in addition to SMS. Dispatch failures are logged and
+    swallowed so they never block login.
+
+    Args:
+        user: CustomUser instance (or None, e.g. new-user phone verification)
+        otp_code: The plain OTP already stored and sent via SMS
+        context_label: Short label for logs (e.g. 'HR login')
+
+    Returns:
+        Masked email string if an email was dispatched, otherwise None.
+    """
+    if not user or not getattr(user, 'email', None):
+        return None
+
+    masked_email = mask_email(user.email)
+    try:
+        from apps.notifications.tasks import send_otp_email
+        send_otp_email.delay(user.email, otp_code, user.get_full_name() or '')
+        logger.info(f'{context_label} OTP email dispatched for {masked_email}')
+    except Exception as e:
+        logger.warning(f'{context_label} OTP email dispatch failed ({e}) for {masked_email}')
+    return masked_email
+
+
+def _otp_sent_detail(masked_email):
+    """Build the user-facing 'OTP sent' message, mentioning email when used."""
+    if masked_email:
+        return f'OTP sent to your phone and email ({masked_email}). Please verify to complete login.'
+    return 'OTP sent to your phone. Please verify to complete login.'
 
 
 def get_tokens_for_user(user):
@@ -94,9 +130,15 @@ class SendOTPView(APIView):
         except Exception as e:
             logger.warning(f'OTP SMS failed ({e}). OTP for {otp_info["masked_phone"]}: {otp_code}')
 
+        # Also send the OTP to the email the employee's account was created with,
+        # if one exists. New-user verification (no account yet) has no email.
+        existing_user = CustomUser.objects.filter(phone_number=phone_number).first()
+        masked_email = _dispatch_otp_email(existing_user, otp_code, 'Employee login')
+
         return Response({
-            'detail': 'OTP sent successfully',
+            'detail': _otp_sent_detail(masked_email),
             'masked_phone': otp_info['masked_phone'],
+            'masked_email': masked_email,
             'expires_in': otp_info['expires_in'],
         }, status=status.HTTP_200_OK)
 
@@ -313,13 +355,17 @@ class HRLoginView(APIView):
         except Exception as e:
             logger.warning(f'HR login SMS failed ({e}). OTP for {otp_info["masked_phone"]}: {otp_code}')
 
+        # Also send the OTP to the account email, if one exists.
+        masked_email = _dispatch_otp_email(user, otp_code, 'HR login')
+
         logger.info(f'HR login session stored for {otp_info["masked_phone"]}')
 
         return Response({
-            'detail': 'OTP sent to your phone. Please verify to complete login.',
+            'detail': _otp_sent_detail(masked_email),
             'requires_otp': True,
             'temp_token': access_token_str,
             'masked_phone': otp_info['masked_phone'],
+            'masked_email': masked_email,
             'expires_in': otp_info['expires_in']
         }, status=status.HTTP_200_OK)
 
@@ -374,13 +420,17 @@ class AdminLoginView(APIView):
         except Exception as e:
             logger.warning(f'Admin login SMS failed ({e}). OTP for {otp_info["masked_phone"]}: {otp_code}')
 
+        # Also send the OTP to the account email, if one exists.
+        masked_email = _dispatch_otp_email(user, otp_code, 'Admin login')
+
         logger.info(f'Admin login session stored for {otp_info["masked_phone"]}')
 
         return Response({
-            'detail': 'OTP sent to your phone. Please verify to complete login.',
+            'detail': _otp_sent_detail(masked_email),
             'requires_otp': True,
             'temp_token': access_token_str,
             'masked_phone': otp_info['masked_phone'],
+            'masked_email': masked_email,
             'expires_in': otp_info['expires_in']
         }, status=status.HTTP_200_OK)
 
