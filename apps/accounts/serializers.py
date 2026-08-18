@@ -91,6 +91,11 @@ class SendOTPSerializer(serializers.Serializer):
     """Serializer for sending OTP to phone number."""
 
     phone_number = serializers.CharField(max_length=20)
+    # Optional email so a new employee being registered (e.g. by an admin)
+    # receives the verification OTP by email in addition to SMS. Existing
+    # users are emailed on the address already on file, so this is ignored
+    # for them.
+    email = serializers.EmailField(required=False, allow_blank=True)
 
     def validate_phone_number(self, value):
         """Validate and normalize phone number."""

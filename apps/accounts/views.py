@@ -37,13 +37,40 @@ from datetime import timedelta
 logger = logging.getLogger(__name__)
 
 
+def _send_otp_email(email, otp_code, context_label, user_name=''):
+    """
+    Send an OTP to a raw email address, if one is provided.
+
+    Dispatch failures are logged and swallowed so they never block the flow.
+
+    Args:
+        email: Recipient email address (or falsy to skip)
+        otp_code: The plain OTP already stored and sent via SMS
+        context_label: Short label for logs (e.g. 'HR login')
+        user_name: Optional recipient display name for the greeting
+
+    Returns:
+        Masked email string if an email was dispatched, otherwise None.
+    """
+    if not email:
+        return None
+
+    masked_email = mask_email(email)
+    try:
+        from apps.notifications.tasks import send_otp_email
+        send_otp_email.delay(email, otp_code, user_name or '')
+        logger.info(f'{context_label} OTP email dispatched for {masked_email}')
+    except Exception as e:
+        logger.warning(f'{context_label} OTP email dispatch failed ({e}) for {masked_email}')
+    return masked_email
+
+
 def _dispatch_otp_email(user, otp_code, context_label):
     """
     Send the login OTP to a user's email, if the user has one on file.
 
     Shared by the employee, HR, and admin login flows so every profile receives
-    the same code by email in addition to SMS. Dispatch failures are logged and
-    swallowed so they never block login.
+    the same code by email in addition to SMS.
 
     Args:
         user: CustomUser instance (or None, e.g. new-user phone verification)
@@ -56,14 +83,7 @@ def _dispatch_otp_email(user, otp_code, context_label):
     if not user or not getattr(user, 'email', None):
         return None
 
-    masked_email = mask_email(user.email)
-    try:
-        from apps.notifications.tasks import send_otp_email
-        send_otp_email.delay(user.email, otp_code, user.get_full_name() or '')
-        logger.info(f'{context_label} OTP email dispatched for {masked_email}')
-    except Exception as e:
-        logger.warning(f'{context_label} OTP email dispatch failed ({e}) for {masked_email}')
-    return masked_email
+    return _send_otp_email(user.email, otp_code, context_label, user.get_full_name() or '')
 
 
 def _otp_sent_detail(masked_email):
@@ -130,10 +150,18 @@ class SendOTPView(APIView):
         except Exception as e:
             logger.warning(f'OTP SMS failed ({e}). OTP for {otp_info["masked_phone"]}: {otp_code}')
 
-        # Also send the OTP to the email the employee's account was created with,
-        # if one exists. New-user verification (no account yet) has no email.
+        # Also send the OTP by email. For an existing account we use the email
+        # on file; for a new employee being registered (e.g. by an admin) we use
+        # the email supplied in the request, so the code reaches both channels.
         existing_user = CustomUser.objects.filter(phone_number=phone_number).first()
-        masked_email = _dispatch_otp_email(existing_user, otp_code, 'Employee login')
+        if existing_user:
+            masked_email = _dispatch_otp_email(existing_user, otp_code, 'Employee login')
+        else:
+            masked_email = _send_otp_email(
+                serializer.validated_data.get('email'),
+                otp_code,
+                'Employee registration',
+            )
 
         return Response({
             'detail': _otp_sent_detail(masked_email),
