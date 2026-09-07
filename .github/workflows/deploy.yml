@@ -75,10 +75,15 @@ jobs:
             echo "📊 Checking disk space..."
             df -h
 
-            # Aggressive cleanup BEFORE pulling new image
+            # Aggressive cleanup BEFORE pulling new image.
+            # NOTE: no `--volumes` here — that flag deletes any volume not
+            # currently attached to a running container, which would wipe the
+            # postgres_data/redis_data volumes (i.e. the production database)
+            # the moment containers are ever down. Images/build cache only.
             echo "🧹 Cleaning up disk space..."
-            docker system prune -af --volumes || true
+            docker system prune -af || true
             docker builder prune -af || true
+            sudo apt-get clean || true
 
             # Clean system logs
             sudo journalctl --vacuum-time=2d || true
@@ -98,15 +103,24 @@ jobs:
             # Log in to DockerHub
             echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-            # Pull the latest image
+            # Free space for the new image WITHOUT risking data. This ~7GB
+            # instance cannot hold the old and new app images at once, which is
+            # why pulling before stopping failed with "no space left on
+            # device". Stop only the app containers (db + redis keep running,
+            # so their data volumes stay referenced and are never pruned), drop
+            # the now-unreferenced OLD app image, then pull the new one.
+            echo "🛑 Stopping app containers (db/redis stay up)..."
+            docker-compose rm -sf web celery_worker celery_beat || true
+
+            echo "🧹 Removing unreferenced images (images only, never volumes)..."
+            docker image prune -af || true
+            df -h
+
+            # Pull the latest image (now there is room to extract it)
             echo "🔄 Pulling latest Docker image..."
             docker pull ${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}
 
-            # Stop and remove old containers
-            echo "🛑 Stopping old containers..."
-            docker-compose down || true
-
-            # Start new containers
+            # Recreate containers with the new image (db/redis are no-ops)
             echo "🚀 Starting new containers..."
             docker-compose up -d
 
