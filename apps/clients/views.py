@@ -177,6 +177,11 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
             # Process and validate rows
             valid_clients = []
             errors = []
+            skipped_duplicates = []
+            # Keys (employer_id, national_id) already handled in this file, so a
+            # file that lists the same person twice — or the same file uploaded
+            # again — does not create duplicate client rows.
+            seen_keys = set()
 
             for index, row in df.iterrows():
                 try:
@@ -275,6 +280,31 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
                     # Validate and create client
                     serializer = ExistingClientSerializer(data=client_data)
                     serializer.is_valid(raise_exception=True)
+
+                    # Skip duplicates: same (employer, national_id) already
+                    # seen in this file or already present in the database.
+                    # This is what prevents re-uploads from multiplying a
+                    # client across the collection report.
+                    national_id = serializer.validated_data.get('national_id')
+                    employer_obj = serializer.validated_data.get('employer')
+                    dedupe_key = (str(employer_obj.id) if employer_obj else None, national_id)
+
+                    is_duplicate = dedupe_key in seen_keys
+                    if not is_duplicate and employer_obj and national_id:
+                        is_duplicate = ExistingClient.objects.filter(
+                            employer=employer_obj, national_id=national_id
+                        ).exists()
+
+                    if is_duplicate:
+                        skipped_duplicates.append({
+                            'row': index + 2,
+                            'full_name': client_data.get('full_name'),
+                            'national_id': national_id,
+                        })
+                        seen_keys.add(dedupe_key)
+                        continue
+
+                    seen_keys.add(dedupe_key)
                     client = serializer.save(entered_by=request.user.get_full_name())
                     valid_clients.append(str(client.id))
 
@@ -310,9 +340,11 @@ class ExistingClientViewSet(viewsets.ModelViewSet):
                 'total_rows': len(df),
                 'successful': len(valid_clients),
                 'failed': len(errors),
+                'skipped_duplicates': len(skipped_duplicates),
                 'valid_client_ids': valid_clients,
-                'errors': errors[:50]  # Limit errors to first 50
-            }, status=status.HTTP_201_CREATED if valid_clients else status.HTTP_400_BAD_REQUEST)
+                'errors': errors[:50],  # Limit errors to first 50
+                'duplicates': skipped_duplicates[:50],
+            }, status=status.HTTP_201_CREATED if (valid_clients or skipped_duplicates) else status.HTTP_400_BAD_REQUEST)
 
         except Exception as e:
             return Response({
@@ -1096,6 +1128,28 @@ def bulk_upload_clients(request):
     return viewset.bulk_upload(request)
 
 
+def _existing_client_dedupe_key(client):
+    """
+    Build a key that identifies the same client/loan across duplicate rows.
+
+    Bulk uploads historically created a fresh row every time a file was
+    re-processed, so the same person can exist several times. National ID is
+    the most reliable identity; when it is missing we fall back to the
+    name + loan signature so genuinely distinct loans are still kept apart.
+    """
+    national_id = (client.national_id or '').strip().lower()
+    if national_id:
+        return ('nid', client.employer_id, national_id)
+    return (
+        'sig',
+        client.employer_id,
+        (client.full_name or '').strip().lower(),
+        client.disbursement_date,
+        client.loan_amount,
+        client.repayment_period,
+    )
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def generate_collection_report(request):
@@ -1196,8 +1250,19 @@ def generate_collection_report(request):
 
         logger.info(f'Filtering collection sheet for month={month}, year={year}')
 
+        # Track existing clients already added so a client that was imported
+        # more than once (duplicate rows for the same person/loan) is only
+        # listed a single time on the sheet.
+        seen_existing = set()
+
         # Add existing clients - apply 15th cutoff and maturity filtering
         for client in existing_clients:
+            dedupe_key = _existing_client_dedupe_key(client)
+            if dedupe_key in seen_existing:
+                logger.debug(f'Skipping duplicate client row {client.full_name} ({client.id})')
+                continue
+            seen_existing.add(dedupe_key)
+
             # Use disbursement_date for filtering
             if client.disbursement_date and should_appear_in_collection_sheet(
                 disbursement_date=client.disbursement_date,
@@ -1447,8 +1512,19 @@ def get_collection_report_data(request):
 
         logger.info(f'Filtering collection sheet data for month={month}, year={year}')
 
+        # Track existing clients already added so a client that was imported
+        # more than once (duplicate rows for the same person/loan) is only
+        # listed a single time on the sheet.
+        seen_existing = set()
+
         # Add existing clients - apply 15th cutoff and maturity filtering
         for client in existing_clients:
+            dedupe_key = _existing_client_dedupe_key(client)
+            if dedupe_key in seen_existing:
+                logger.debug(f'Skipping duplicate client row {client.full_name} ({client.id})')
+                continue
+            seen_existing.add(dedupe_key)
+
             # Use disbursement_date for filtering
             if client.disbursement_date and should_appear_in_collection_sheet(
                 disbursement_date=client.disbursement_date,

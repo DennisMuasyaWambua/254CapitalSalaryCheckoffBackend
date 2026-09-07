@@ -269,8 +269,17 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
 
         # Get employee profile from context
         request = self.context.get('request')
-        if request and hasattr(request.user, 'employee_profile'):
-            employee_profile = request.user.employee_profile
+        if request and request.user and request.user.is_authenticated:
+            employee_profile = getattr(request.user, 'employee_profile', None)
+
+            # An employee account with no profile cannot apply — surface a
+            # clear, actionable error instead of letting a downstream
+            # attribute lookup blow up into a confusing 404/500.
+            if employee_profile is None:
+                raise serializers.ValidationError(
+                    'Your employee profile is incomplete. Please contact your '
+                    'HR/employer to finish setting up your account before applying.'
+                )
 
             # Check if employee is confirmed staff (eligibility requirement)
             if not employee_profile.is_loan_eligible:

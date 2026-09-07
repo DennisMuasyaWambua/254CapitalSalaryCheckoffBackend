@@ -5,6 +5,7 @@ Serializers for authentication and user profiles.
 from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
+from django.db import transaction
 from decimal import Decimal
 from .models import CustomUser, EmployeeProfile, HRProfile
 from apps.employers.models import Employer
@@ -246,35 +247,39 @@ class RegisterEmployeeSerializer(serializers.Serializer):
         bank_account_number = validated_data.pop('bank_account_number')
         mpesa_number = validated_data.pop('mpesa_number', '')
 
-        # Create user
-        user = CustomUser.objects.create(
-            username=validated_data['phone_number'],
-            phone_number=validated_data['phone_number'],
-            national_id=validated_data['national_id'],
-            first_name=validated_data['first_name'],
-            last_name=validated_data['last_name'],
-            email=validated_data.get('email', ''),
-            role='employee',
-            is_phone_verified=True,
-        )
+        # Create the user and their employee profile atomically. If the
+        # profile fails to save for any reason, the user creation is rolled
+        # back too — otherwise we would orphan a role='employee' account with
+        # no profile, which then breaks the loan application flow.
+        with transaction.atomic():
+            user = CustomUser.objects.create(
+                username=validated_data['phone_number'],
+                phone_number=validated_data['phone_number'],
+                national_id=validated_data['national_id'],
+                first_name=validated_data['first_name'],
+                last_name=validated_data['last_name'],
+                email=validated_data.get('email', ''),
+                role='employee',
+                is_phone_verified=True,
+            )
 
-        # Create employee profile
-        EmployeeProfile.objects.create(
-            user=user,
-            employer_id=employer_id,
-            employee_id=employee_id,
-            department=department,
-            employment_type=employment_type,
-            contract_end_date=contract_end_date,
-            employment_start_date=employment_start_date,
-            work_email=work_email,
-            personal_email=personal_email,
-            residential_location=residential_location,
-            monthly_gross_salary=monthly_gross_salary,
-            bank_name=bank_name,
-            bank_account_number=bank_account_number,
-            mpesa_number=mpesa_number,
-        )
+            # Create employee profile
+            EmployeeProfile.objects.create(
+                user=user,
+                employer_id=employer_id,
+                employee_id=employee_id,
+                department=department,
+                employment_type=employment_type,
+                contract_end_date=contract_end_date,
+                employment_start_date=employment_start_date,
+                work_email=work_email,
+                personal_email=personal_email,
+                residential_location=residential_location,
+                monthly_gross_salary=monthly_gross_salary,
+                bank_name=bank_name,
+                bank_account_number=bank_account_number,
+                mpesa_number=mpesa_number,
+            )
 
         return user
 
