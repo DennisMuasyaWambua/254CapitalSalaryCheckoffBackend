@@ -418,6 +418,32 @@ def notify_status_change(application_id: str, new_status: str):
         if new_status in ['approved', 'declined', 'disbursed']:
             send_sms(app.employee.phone_number, f'254 Capital: {message}')
 
+        # Email the employee for approve/decline decisions (parity with SMS).
+        # Disbursement gets its own detailed email via notify_disbursement, so
+        # it is intentionally excluded here to avoid a duplicate message.
+        if new_status in ['approved', 'declined'] and app.employee.email:
+            try:
+                title = 'Loan Application Approved' if new_status == 'approved' else 'Loan Application Declined'
+                header_color = '#27ae60' if new_status == 'approved' else '#e74c3c'
+                body_html = _hr_email_html(
+                    header_color=header_color,
+                    title=title,
+                    greeting_name=app.employee.get_full_name() or 'there',
+                    intro_html=f'<p>{message}</p>',
+                    detail_rows=[
+                        ('Application Number', app.application_number),
+                        ('Loan Amount', f'KES {app.principal_amount:,.2f}'),
+                        ('Status', new_status.title()),
+                    ],
+                )
+                result = send_email(app.employee.email, f'{title} - 254 Capital', body_html)
+                if result.get('success'):
+                    logger.info(f'Status change email sent to {app.employee.email} for {app.application_number}')
+                else:
+                    logger.error(f'Status change email failed for {app.employee.email}: {result.get("error")}')
+            except Exception as e:
+                logger.error(f'Status change email exception for {app.application_number}: {e}')
+
         logger.info(f'Status change notification sent for {application_id}: {new_status}')
 
     except Exception as e:
@@ -458,6 +484,30 @@ def notify_disbursement(application_id: str):
             f'Thank you for choosing 254 Capital.'
         )
         send_sms(app.employee.phone_number, sms_message)
+
+        # Email the employee with the full disbursement details.
+        if app.employee.email:
+            try:
+                body_html = _hr_email_html(
+                    header_color='#27ae60',
+                    title='Loan Disbursed',
+                    greeting_name=app.employee.get_full_name() or 'there',
+                    intro_html='<p>Good news! Your loan has been disbursed. The details are below.</p>',
+                    detail_rows=[
+                        ('Application Number', app.application_number),
+                        ('Amount Disbursed', f'KES {app.principal_amount:,.2f}'),
+                        ('Disbursement Method', app.get_disbursement_method_display()),
+                        ('Monthly Deduction', f'KES {app.monthly_deduction:,.2f}'),
+                        ('First Deduction', app.first_deduction_date.strftime('%d %B %Y')),
+                    ],
+                )
+                result = send_email(app.employee.email, 'Loan Disbursed - 254 Capital', body_html)
+                if result.get('success'):
+                    logger.info(f'Disbursement email sent to {app.employee.email} for {app.application_number}')
+                else:
+                    logger.error(f'Disbursement email failed for {app.employee.email}: {result.get("error")}')
+            except Exception as e:
+                logger.error(f'Disbursement email exception for {app.application_number}: {e}')
 
         logger.info(f'Disbursement notification sent for {application_id}')
 
