@@ -18,7 +18,7 @@ from .serializers import (
     EmployerCreateSerializer, EmployerUpdateSerializer
 )
 from apps.accounts.models import CustomUser, HRProfile
-from apps.accounts.permissions import IsAdmin, IsHROrAdmin
+from apps.accounts.permissions import IsAdmin
 from common.pagination import StandardPagination
 from common.utils import get_client_ip
 from apps.audit.models import AuditLog
@@ -300,7 +300,11 @@ class EmployerDetailView(APIView):
     PUT  /api/v1/employers/<uuid:pk>/  — Update employer (Admin only)
     """
 
-    permission_classes = [IsAuthenticated, IsHROrAdmin]
+    # Any authenticated user may attempt a GET; access is scoped per role in
+    # get_object (HR/employee restricted to their own employer). PUT enforces
+    # admin-only separately. Employees need this endpoint to read their
+    # employer's loan terms (interest method/rate) when applying for a loan.
+    permission_classes = [IsAuthenticated]
 
     def get_object(self, pk, user):
         """Get employer with permission check."""
@@ -311,6 +315,12 @@ class EmployerDetailView(APIView):
             if user.role == 'hr_manager':
                 hr_profile = getattr(user, 'hr_profile', None)
                 if not hr_profile or hr_profile.employer != employer:
+                    return None
+
+            # Employees can only view the employer they belong to
+            if user.role == 'employee':
+                employee_profile = getattr(user, 'employee_profile', None)
+                if not employee_profile or employee_profile.employer != employer:
                     return None
 
             return employer
