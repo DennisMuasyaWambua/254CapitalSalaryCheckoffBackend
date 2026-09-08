@@ -283,6 +283,12 @@ class HRProfile(models.Model):
         related_name='hr_managers'
     )
     department = models.CharField(max_length=100, blank=True)
+    position = models.CharField(
+        max_length=100,
+        blank=True,
+        default='',
+        help_text="HR user's job title/position (e.g. 'HR Manager')"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
