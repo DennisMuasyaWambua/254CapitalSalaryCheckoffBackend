@@ -44,8 +44,8 @@ class Employer(models.Model):
     interest_method = models.CharField(
         max_length=20,
         choices=INTEREST_METHOD_CHOICES,
-        default='flat',
-        help_text='Interest calculation method: flat (default) or reducing_balance (EMI)'
+        default='reducing_balance',
+        help_text='Interest calculation method: reducing_balance (EMI, default) or flat'
     )
     interest_rate = models.DecimalField(
         max_digits=5,

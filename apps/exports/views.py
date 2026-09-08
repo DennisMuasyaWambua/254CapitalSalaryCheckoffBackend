@@ -13,7 +13,8 @@ from decimal import Decimal
 from .generators import (
     generate_deduction_list_excel,
     generate_repayment_schedule_pdf,
-    generate_loan_book_report_data
+    generate_loan_book_report_data,
+    generate_disbursement_report_excel,
 )
 from apps.accounts.permissions import IsHROrAdmin, IsAdmin
 from apps.loans.models import LoanApplication, RepaymentSchedule
@@ -21,6 +22,106 @@ from apps.loans.services import calculate_first_deduction_date, should_appear_in
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_report_period(request):
+    """
+    Resolve the (from_date, to_date) reporting window from query params.
+
+    Accepts ISO dates (YYYY-MM-DD) in ``from_date``/``to_date``. Defaults to
+    the current calendar month when omitted. Returns (from_date, to_date) or
+    raises ValueError with a human-readable message.
+    """
+    from datetime import datetime
+
+    today = date.today()
+    from_raw = request.query_params.get('from_date')
+    to_raw = request.query_params.get('to_date')
+
+    if from_raw:
+        try:
+            from_date = datetime.strptime(from_raw, '%Y-%m-%d').date()
+        except ValueError:
+            raise ValueError('from_date must be in YYYY-MM-DD format.')
+    else:
+        from_date = today.replace(day=1)
+
+    if to_raw:
+        try:
+            to_date = datetime.strptime(to_raw, '%Y-%m-%d').date()
+        except ValueError:
+            raise ValueError('to_date must be in YYYY-MM-DD format.')
+    else:
+        to_date = today
+
+    if from_date > to_date:
+        raise ValueError('from_date cannot be after to_date.')
+
+    return from_date, to_date
+
+
+def _resolve_report_employer(request):
+    """
+    Resolve which employer a report is scoped to.
+
+    HR managers are always scoped to their own employer. Admins may pass an
+    optional ``employer_id`` to scope to one company, or omit it for an
+    all-company report. Returns an Employer instance (or None for all), and
+    raises ValueError for bad/unknown employer ids.
+    """
+    from apps.employers.models import Employer
+
+    if request.user.role == 'hr_manager':
+        hr_profile = getattr(request.user, 'hr_profile', None)
+        if not hr_profile or not hr_profile.employer_id:
+            raise ValueError('HR user is not associated with an employer.')
+        return hr_profile.employer
+
+    # admin
+    employer_id = request.query_params.get('employer_id')
+    if not employer_id:
+        return None
+    try:
+        return Employer.objects.get(id=employer_id)
+    except Employer.DoesNotExist:
+        raise ValueError('Employer not found.')
+
+
+def _build_disbursement_rows(employer, from_date, to_date):
+    """
+    Build the list of disbursed-loan rows for a period, deduplicated per loan.
+
+    One row per unique disbursed LoanApplication whose disbursement_date falls
+    within [from_date, to_date]. Scoped to ``employer`` when provided.
+    """
+    loans = LoanApplication.objects.filter(
+        status=LoanApplication.Status.DISBURSED,
+        disbursement_date__gte=from_date,
+        disbursement_date__lte=to_date,
+    ).select_related('employee', 'employee__employee_profile', 'employer')
+
+    if employer is not None:
+        loans = loans.filter(employer=employer)
+
+    loans = loans.order_by('disbursement_date', 'application_number')
+
+    rows = []
+    for loan in loans:
+        profile = getattr(loan.employee, 'employee_profile', None)
+        rows.append({
+            'loan_id': str(loan.id),
+            'employee_name': loan.employee.get_full_name() if loan.employee else 'N/A',
+            'employee_id': profile.employee_id if profile else '',
+            'employer_name': loan.employer.name if loan.employer else '',
+            'loan_number': loan.application_number,
+            'disbursement_date': loan.disbursement_date.isoformat() if loan.disbursement_date else None,
+            'disbursement_method': loan.get_disbursement_method_display() if loan.disbursement_method else '',
+            'principal_amount': loan.principal_amount or Decimal('0.00'),
+            'interest_method': 'Reducing Balance' if getattr(loan, 'interest_method', 'flat') == 'reducing_balance' else 'Flat',
+            'repayment_months': loan.repayment_months,
+            'total_repayment': loan.total_repayment or Decimal('0.00'),
+        })
+    return rows
 
 
 class DeductionListExportView(APIView):
@@ -440,3 +541,90 @@ class CollectionSheetReportView(APIView):
                 'year': year,
             }
         }, status=status.HTTP_200_OK)
+
+
+class DisbursementReportView(APIView):
+    """
+    GET /api/v1/exports/reports/disbursement/
+    Disbursement report (JSON) for a company over a selected period.
+
+    Query params:
+    - employer_id: Employer UUID (optional for admin -> all companies; ignored for HR)
+    - from_date, to_date: ISO dates (YYYY-MM-DD). Default: current month.
+    """
+
+    permission_classes = [IsAuthenticated, IsHROrAdmin]
+
+    def get(self, request):
+        try:
+            employer = _resolve_report_employer(request)
+            from_date, to_date = _parse_report_period(request)
+        except ValueError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        rows = _build_disbursement_rows(employer, from_date, to_date)
+
+        total_principal = sum((r['principal_amount'] for r in rows), Decimal('0.00'))
+        total_repayment = sum((r['total_repayment'] for r in rows), Decimal('0.00'))
+
+        # Serialize Decimals to strings for a stable JSON contract.
+        items = [
+            {**r, 'principal_amount': str(r['principal_amount']), 'total_repayment': str(r['total_repayment'])}
+            for r in rows
+        ]
+
+        logger.info(
+            f'Disbursement report generated: {len(items)} loans '
+            f'({from_date} to {to_date}, employer={employer.name if employer else "all"})'
+        )
+
+        return Response({
+            'employer_name': employer.name if employer else 'All Employers',
+            'from_date': from_date.isoformat(),
+            'to_date': to_date.isoformat(),
+            'items': items,
+            'summary': {
+                'total_loans': len(items),
+                'total_disbursed': str(total_principal),
+                'total_repayment': str(total_repayment),
+            },
+        }, status=status.HTTP_200_OK)
+
+
+class DisbursementReportExcelView(APIView):
+    """
+    GET /api/v1/exports/reports/disbursement/excel/
+    Disbursement report as an Excel download (same filters as the JSON view).
+    """
+
+    permission_classes = [IsAuthenticated, IsHROrAdmin]
+
+    def get(self, request):
+        try:
+            employer = _resolve_report_employer(request)
+            from_date, to_date = _parse_report_period(request)
+        except ValueError as e:
+            return Response({'detail': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        rows = _build_disbursement_rows(employer, from_date, to_date)
+        employer_name = employer.name if employer else 'All Employers'
+
+        excel_file = generate_disbursement_report_excel(
+            employer_name=employer_name,
+            from_date=from_date,
+            to_date=to_date,
+            rows=rows,
+        )
+
+        safe_name = employer_name.replace(' ', '_')
+        filename = f'Disbursement_Report_{safe_name}_{from_date.isoformat()}_{to_date.isoformat()}.xlsx'
+
+        response = HttpResponse(
+            excel_file.read(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+        logger.info(f'Disbursement report Excel exported for {employer_name} ({from_date} to {to_date})')
+
+        return response

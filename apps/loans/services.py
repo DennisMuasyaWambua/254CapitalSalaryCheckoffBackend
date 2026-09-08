@@ -200,12 +200,16 @@ def calculate_reducing_balance(
             - interest_rate: Monthly interest rate used
             - schedule: List of dicts with installment breakdown
 
+    This matches the "Equal Total Payments" method of standard amortization
+    loan calculators (equal monthly instalments, interest charged on the
+    reducing outstanding balance).
+
     Example:
         >>> calculate_reducing_balance(Decimal('100000'), Decimal('0.05'), 6)
         {
-            'total_repayment': Decimal('117684.00'),
-            'monthly_deduction': Decimal('19614.00'),
-            'interest_amount': Decimal('17684.00'),
+            'total_repayment': Decimal('118210.50'),
+            'monthly_deduction': Decimal('19701.75'),
+            'interest_amount': Decimal('18210.50'),
             'interest_rate': Decimal('0.05'),
             'schedule': [...]
         }

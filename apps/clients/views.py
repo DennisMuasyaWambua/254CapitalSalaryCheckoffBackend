@@ -1254,6 +1254,9 @@ def generate_collection_report(request):
         # more than once (duplicate rows for the same person/loan) is only
         # listed a single time on the sheet.
         seen_existing = set()
+        # National IDs of existing clients already listed, so the same person is
+        # not counted again from a new loan below (prevents cross-list dupes).
+        included_national_ids = set()
 
         # Add existing clients - apply 15th cutoff and maturity filtering
         for client in existing_clients:
@@ -1276,12 +1279,20 @@ def generate_collection_report(request):
                     'monthly_deduction': client.monthly_deduction,
                     'outstanding_balance': client.outstanding_balance
                 })
+                included_national_ids.add((client.national_id or '').strip().lower())
                 logger.debug(f'Including client {client.full_name}')
             else:
                 logger.debug(f'Excluding client {client.full_name} (not in collection period)')
 
         # Add new loan applications - apply 15th cutoff and maturity filtering
         for loan in new_loans:
+            # A person already listed as a migrated existing client (matched by
+            # national ID) must not appear again from their new loan.
+            emp_nid = (getattr(loan.employee, 'national_id', '') or '').strip().lower()
+            if emp_nid and emp_nid in included_national_ids:
+                logger.debug(f'Skipping new loan for {loan.application_number}; employee already listed as existing client')
+                continue
+
             # Only include if there's outstanding balance and loan should appear in this period
             if loan.outstanding_balance > 0 and loan.disbursement_date:
                 if should_appear_in_collection_sheet(
@@ -1516,6 +1527,9 @@ def get_collection_report_data(request):
         # more than once (duplicate rows for the same person/loan) is only
         # listed a single time on the sheet.
         seen_existing = set()
+        # National IDs of existing clients already listed, so the same person is
+        # not counted again from a new loan below (prevents cross-list dupes).
+        included_national_ids = set()
 
         # Add existing clients - apply 15th cutoff and maturity filtering
         for client in existing_clients:
@@ -1541,12 +1555,20 @@ def get_collection_report_data(request):
                     'disbursement_date': client.disbursement_date.isoformat() if client.disbursement_date else None,
                     'repayment_period': client.repayment_period
                 })
+                included_national_ids.add((client.national_id or '').strip().lower())
                 logger.debug(f'Including client {client.full_name}')
             else:
                 logger.debug(f'Excluding client {client.full_name} (not in collection period)')
 
         # Add new loan applications - apply 15th cutoff and maturity filtering
         for loan in new_loans:
+            # A person already listed as a migrated existing client (matched by
+            # national ID) must not appear again from their new loan.
+            emp_nid = (getattr(loan.employee, 'national_id', '') or '').strip().lower()
+            if emp_nid and emp_nid in included_national_ids:
+                logger.debug(f'Skipping new loan for {loan.application_number}; employee already listed as existing client')
+                continue
+
             # Only include if there's outstanding balance and loan should appear in this period
             if loan.outstanding_balance > 0 and loan.disbursement_date:
                 if should_appear_in_collection_sheet(

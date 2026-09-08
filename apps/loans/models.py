@@ -69,7 +69,17 @@ class LoanApplication(models.Model):
         max_digits=5,
         decimal_places=4,
         default=Decimal('0.0500'),
-        help_text='Interest rate (default 5% = 0.0500)'
+        help_text='Monthly interest rate (default 5% = 0.0500)'
+    )
+    # Interest method captured at application time so historical loans keep the
+    # terms they were computed under, even if the employer's method changes
+    # later. Defaults to 'flat' so loans created before reducing balance was
+    # introduced remain correctly labelled.
+    interest_method = models.CharField(
+        max_length=20,
+        choices=[('flat', 'Flat Rate'), ('reducing_balance', 'Reducing Balance')],
+        default='flat',
+        help_text='Interest calculation method used for this loan'
     )
     repayment_months = models.IntegerField(
         choices=REPAYMENT_MONTHS_CHOICES,

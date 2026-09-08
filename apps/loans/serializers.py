@@ -335,7 +335,7 @@ class LoanCalculatorSerializer(serializers.Serializer):
     months = serializers.ChoiceField(choices=settings.LOAN_REPAYMENT_TERMS)
     calculation_type = serializers.ChoiceField(
         choices=['flat', 'reducing_balance', 'amortized'],
-        default='flat'
+        default='reducing_balance'
     )
     annual_rate = serializers.DecimalField(
         max_digits=5,

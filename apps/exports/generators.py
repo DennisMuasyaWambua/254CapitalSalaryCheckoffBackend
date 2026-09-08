@@ -135,6 +135,117 @@ def generate_deduction_list_excel(
         raise
 
 
+def generate_disbursement_report_excel(
+    employer_name: str,
+    from_date: date,
+    to_date: date,
+    rows: list
+) -> BytesIO:
+    """
+    Generate Excel file with a disbursement report for a period.
+
+    Args:
+        employer_name: Employer name (or 'All Employers')
+        from_date: Start of the reporting period (inclusive)
+        to_date: End of the reporting period (inclusive)
+        rows: List of disbursement records (dicts)
+
+    Returns:
+        BytesIO object with Excel file
+    """
+    try:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = 'Disbursement Report'
+
+        header_font = Font(bold=True, color='FFFFFF', size=12)
+        header_fill = PatternFill(start_color='3F2A56', end_color='3F2A56', fill_type='solid')
+        title_font = Font(bold=True, size=14)
+        border = Border(
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin')
+        )
+
+        headers = [
+            'Employee Name', 'Employee ID', 'Loan Number', 'Disbursement Date',
+            'Method', 'Principal (KES)', 'Interest Method', 'Term (Months)',
+            'Total Repayment (KES)'
+        ]
+        last_col = get_column_letter(len(headers))
+
+        # Title
+        ws.merge_cells(f'A1:{last_col}1')
+        ws['A1'] = f'{employer_name} - Loan Disbursement Report'
+        ws['A1'].font = title_font
+        ws['A1'].alignment = Alignment(horizontal='center')
+
+        # Period
+        ws.merge_cells(f'A2:{last_col}2')
+        ws['A2'] = f'Period: {from_date.strftime("%d %b %Y")} - {to_date.strftime("%d %b %Y")}'
+        ws['A2'].alignment = Alignment(horizontal='center')
+
+        ws.append([])
+
+        # Headers (row 4)
+        ws.append(headers)
+        for cell in ws[4]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = border
+
+        # Data rows
+        for row in rows:
+            ws.append([
+                row['employee_name'],
+                row['employee_id'],
+                row['loan_number'],
+                row['disbursement_date'],
+                row['disbursement_method'],
+                float(row['principal_amount']),
+                row['interest_method'],
+                row['repayment_months'],
+                float(row['total_repayment']),
+            ])
+            for col in (6, 9):  # currency columns
+                cell = ws.cell(row=ws.max_row, column=col)
+                cell.number_format = '#,##0.00'
+            for cell in ws[ws.max_row]:
+                cell.border = border
+                cell.alignment = Alignment(vertical='center')
+
+        # Summary row
+        ws.append([])
+        summary_row = ws.max_row + 1
+        ws[f'A{summary_row}'] = 'TOTAL'
+        ws[f'A{summary_row}'].font = Font(bold=True)
+
+        total_principal = sum(row['principal_amount'] for row in rows)
+        total_repayment = sum(row['total_repayment'] for row in rows)
+        ws[f'F{summary_row}'] = float(total_principal)
+        ws[f'F{summary_row}'].number_format = '#,##0.00'
+        ws[f'F{summary_row}'].font = Font(bold=True)
+        ws[f'I{summary_row}'] = float(total_repayment)
+        ws[f'I{summary_row}'].number_format = '#,##0.00'
+        ws[f'I{summary_row}'].font = Font(bold=True)
+
+        column_widths = [28, 15, 18, 18, 12, 18, 18, 14, 20]
+        for i, width in enumerate(column_widths, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = width
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        logger.info(f'Generated disbursement report Excel for {employer_name}')
+
+        return output
+
+    except Exception as e:
+        logger.error(f'Failed to generate disbursement report Excel: {str(e)}')
+        raise
+
+
 def generate_repayment_schedule_pdf(loan_application) -> BytesIO:
     """
     Generate PDF repayment schedule.
@@ -149,12 +260,23 @@ def generate_repayment_schedule_pdf(loan_application) -> BytesIO:
         # Get repayment schedule
         schedule = loan_application.repayment_schedule.all().order_by('installment_number')
 
+        # Interest terms for display. interest_rate is stored as a monthly
+        # fraction (0.05 == 5%), so present it as a percentage, and label the
+        # method the loan was actually computed under.
+        interest_method = getattr(loan_application, 'interest_method', 'flat')
+        interest_method_label = (
+            'Reducing Balance' if interest_method == 'reducing_balance' else 'Flat'
+        )
+        interest_rate_pct = (loan_application.interest_rate or Decimal('0')) * Decimal('100')
+
         # Prepare context
         context = {
             'loan': loan_application,
             'employer': loan_application.employer,
             'employee': loan_application.employee,
             'schedule': schedule,
+            'interest_method_label': interest_method_label,
+            'interest_rate_pct': interest_rate_pct,
             'generated_date': datetime.now().strftime('%d %B %Y'),
         }
 
@@ -309,7 +431,7 @@ def generate_repayment_schedule_pdf(loan_application) -> BytesIO:
             </div>
             <div class="info-row">
                 <div class="info-label">Interest Rate:</div>
-                <div class="info-value">{{ loan.interest_rate|floatformat:2 }}% Flat</div>
+                <div class="info-value">{{ interest_rate_pct|floatformat:2 }}% per month ({{ interest_method_label }})</div>
             </div>
             <div class="info-row">
                 <div class="info-label">Repayment Period:</div>
@@ -359,7 +481,7 @@ def generate_repayment_schedule_pdf(loan_application) -> BytesIO:
         <ul>
             <li>Deductions will be made on the 25th of each month from your salary.</li>
             <li>The first deduction is highlighted in green.</li>
-            <li>This is an interest-bearing loan at {{ loan.interest_rate|floatformat:2 }}% flat rate.</li>
+            <li>This is an interest-bearing loan at {{ interest_rate_pct|floatformat:2 }}% per month ({{ interest_method_label }}).</li>
             <li>Please ensure sufficient salary balance for deductions.</li>
         </ul>
     </div>

@@ -135,6 +135,11 @@ class LoanApplicationListCreateView(APIView):
                 purpose=serializer.validated_data.get('purpose', ''),
                 total_repayment=calc['total_repayment'],
                 monthly_deduction=calc['monthly_deduction'],
+                # Persist the interest terms the loan was computed under so the
+                # figures and repayment schedule stay reproducible even if the
+                # employer's configuration changes later.
+                interest_rate=Decimal(str(interest_rate)),
+                interest_method=interest_method,
                 status=LoanApplication.Status.SUBMITTED,
                 terms_accepted=serializer.validated_data['terms_accepted'],
                 terms_accepted_at=timezone.now() if serializer.validated_data['terms_accepted'] else None,
