@@ -32,7 +32,7 @@ class LoanApplication(models.Model):
         BANK = 'bank', 'Bank Transfer'
         MPESA = 'mpesa', 'M-Pesa'
 
-    REPAYMENT_MONTHS_CHOICES = [(3, '3 months'), (6, '6 months'), (9, '9 months'), (12, '12 months')]
+    REPAYMENT_MONTHS_CHOICES = [(m, f'{m} month' if m == 1 else f'{m} months') for m in range(1, 13)]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     application_number = models.CharField(
