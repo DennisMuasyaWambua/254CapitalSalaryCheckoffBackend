@@ -343,7 +343,10 @@ FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
 LOAN_INTEREST_RATE_FLAT = 0.05  # 5% flat interest rate
 LOAN_MIN_AMOUNT = 5000  # KES 5,000
 LOAN_MAX_AMOUNT = 5000000  # KES 5,000,000
-LOAN_REPAYMENT_TERMS = list(range(1, 13))  # 1-12 months
+# No upper bound on the repayment term. 1 is a hard floor because a zero-month
+# term divides by zero in both interest calculations (the EMI denominator
+# (1+r)^n - 1 is 0 at n=0, and the flat method divides the total by the term).
+LOAN_MIN_REPAYMENT_MONTHS = 1
 PAYROLL_DEDUCTION_DAY = 25  # 25th of each month
 
 # Document Upload Settings

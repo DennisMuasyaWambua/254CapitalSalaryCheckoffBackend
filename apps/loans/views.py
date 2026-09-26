@@ -642,7 +642,11 @@ class HRReviewApplicationView(APIView):
         # Tell admins the assessment queue has new work
         if action == 'approve':
             from apps.notifications.tasks import notify_admins_hr_approved
-            notify_admins_hr_approved.delay(str(app.id))
+            notify_admins_hr_approved.delay(
+                str(app.id),
+                request.user.get_full_name() or 'HR Manager',
+                comment,
+            )
 
         # Log action
         AuditLog.log(
@@ -733,27 +737,30 @@ class HRReviewApplicationView(APIView):
             except Exception as e:
                 logger.error(f'Failed to send HR review email: {str(e)}')
 
-        # Send internal alert to admin
-        try:
-            alert_message = f"""
-            <p><strong>HR {action.title()} - Loan Application</strong></p>
-            <ul>
-                <li><strong>Application:</strong> {app.application_number}</li>
-                <li><strong>Employee:</strong> {app.employee.get_full_name()}</li>
-                <li><strong>Employer:</strong> {app.employer.name}</li>
-                <li><strong>Amount:</strong> KES {app.principal_amount:,.2f}</li>
-                <li><strong>Action:</strong> {action.title()}</li>
-                <li><strong>HR Manager:</strong> {request.user.get_full_name()}</li>
-                <li><strong>Comment:</strong> {comment}</li>
-            </ul>
-            """
-            send_internal_alert(
-                subject=f'HR {action.title()} - {app.application_number}',
-                message=alert_message,
-                alert_type='success' if action == 'approve' else 'warning'
-            )
-        except Exception as e:
-            logger.error(f'Failed to send internal alert: {str(e)}')
+        # Internal alert for declines only. Approvals are covered by
+        # notify_admins_hr_approved, which emails every admin account and CCs
+        # the same internal address, so alerting here too would duplicate it.
+        if action != 'approve':
+            try:
+                alert_message = f"""
+                <p><strong>HR {action.title()} - Loan Application</strong></p>
+                <ul>
+                    <li><strong>Application:</strong> {app.application_number}</li>
+                    <li><strong>Employee:</strong> {app.employee.get_full_name()}</li>
+                    <li><strong>Employer:</strong> {app.employer.name}</li>
+                    <li><strong>Amount:</strong> KES {app.principal_amount:,.2f}</li>
+                    <li><strong>Action:</strong> {action.title()}</li>
+                    <li><strong>HR Manager:</strong> {request.user.get_full_name()}</li>
+                    <li><strong>Comment:</strong> {comment}</li>
+                </ul>
+                """
+                send_internal_alert(
+                    subject=f'HR {action.title()} - {app.application_number}',
+                    message=alert_message,
+                    alert_type='warning'
+                )
+            except Exception as e:
+                logger.error(f'Failed to send internal alert: {str(e)}')
 
         return Response({
             'detail': status_msg,
@@ -813,7 +820,11 @@ class HRBatchApprovalView(APIView):
 
                 if action == 'approve':
                     from apps.notifications.tasks import notify_admins_hr_approved
-                    notify_admins_hr_approved.delay(str(app.id))
+                    notify_admins_hr_approved.delay(
+                        str(app.id),
+                        request.user.get_full_name() or 'HR Manager',
+                        comment,
+                    )
 
                 processed.append(str(app.id))
 

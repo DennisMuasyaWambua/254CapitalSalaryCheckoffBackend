@@ -32,8 +32,6 @@ class LoanApplication(models.Model):
         BANK = 'bank', 'Bank Transfer'
         MPESA = 'mpesa', 'M-Pesa'
 
-    REPAYMENT_MONTHS_CHOICES = [(m, f'{m} month' if m == 1 else f'{m} months') for m in range(1, 13)]
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     application_number = models.CharField(
         max_length=20,
@@ -82,8 +80,8 @@ class LoanApplication(models.Model):
         help_text='Interest calculation method used for this loan'
     )
     repayment_months = models.IntegerField(
-        choices=REPAYMENT_MONTHS_CHOICES,
-        help_text='Number of months for repayment'
+        validators=[MinValueValidator(settings.LOAN_MIN_REPAYMENT_MONTHS)],
+        help_text='Number of months for repayment (no upper limit)'
     )
     total_repayment = models.DecimalField(
         max_digits=12,

@@ -203,8 +203,8 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
         min_value=Decimal(str(settings.LOAN_MIN_AMOUNT)),
         max_value=Decimal(str(settings.LOAN_MAX_AMOUNT))
     )
-    repayment_months = serializers.ChoiceField(
-        choices=settings.LOAN_REPAYMENT_TERMS
+    repayment_months = serializers.IntegerField(
+        min_value=settings.LOAN_MIN_REPAYMENT_MONTHS
     )
     disbursement_method = serializers.ChoiceField(
         choices=LoanApplication.DisbursementMethod.choices,
@@ -332,7 +332,7 @@ class LoanCalculatorSerializer(serializers.Serializer):
         min_value=Decimal(str(settings.LOAN_MIN_AMOUNT)),
         max_value=Decimal(str(settings.LOAN_MAX_AMOUNT))
     )
-    months = serializers.ChoiceField(choices=settings.LOAN_REPAYMENT_TERMS)
+    months = serializers.IntegerField(min_value=settings.LOAN_MIN_REPAYMENT_MONTHS)
     calculation_type = serializers.ChoiceField(
         choices=['flat', 'reducing_balance', 'amortized'],
         default='reducing_balance'

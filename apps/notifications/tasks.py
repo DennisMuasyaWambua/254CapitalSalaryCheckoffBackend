@@ -460,16 +460,18 @@ def notify_status_change(application_id: str, new_status: str):
 
 
 @shared_task
-def notify_admins_hr_approved(application_id: str):
+def notify_admins_hr_approved(application_id: str, hr_name: str = '', comment: str = ''):
     """
-    Notify 254 Capital admins that HR approved an application and it is now
-    waiting on credit assessment.
+    Notify 254 Capital admins, in-app and by email, that an employer's HR has
+    approved an application and it is ready for admin approval and disbursement.
 
     notify_status_change only reaches the employee, so without this admins get
-    no in-app signal that their assessment queue has new work.
+    no signal that their assessment queue has new work.
 
     Args:
         application_id: UUID of loan application
+        hr_name: Display name of the HR manager who approved it
+        comment: The HR manager's approval comment
     """
     try:
         from apps.loans.models import LoanApplication
@@ -478,13 +480,15 @@ def notify_admins_hr_approved(application_id: str):
         app = LoanApplication.objects.select_related('employee', 'employer').get(id=application_id)
 
         admin_users = CustomUser.objects.filter(role='admin', is_active=True)
+        employee_name = app.employee.get_full_name()
+        approver = hr_name or 'The HR team'
 
         for admin_user in admin_users:
             Notification.objects.create(
                 user=admin_user,
                 title='Loan Awaiting Credit Assessment',
                 message=(
-                    f'{app.application_number}: {app.employee.get_full_name()} '
+                    f'{app.application_number}: {employee_name} '
                     f'({app.employer.name}) was approved by HR for '
                     f'KES {app.principal_amount:,.2f} and is awaiting 254 Capital '
                     f'credit assessment.'
@@ -497,6 +501,62 @@ def notify_admins_hr_approved(application_id: str):
             f'Admin HR-approval notifications created for {application_id} '
             f'({admin_users.count()} admin(s))'
         )
+
+        # Email the same admins. Addresses come from the admin accounts
+        # themselves rather than a hard-coded alias, so adding an admin is
+        # enough to put them on these alerts.
+        recipients = [
+            (u.email, u.get_full_name() or 'Admin')
+            for u in admin_users if u.email
+        ]
+        if not recipients:
+            logger.warning(
+                f'No admin email address found for {app.application_number}; '
+                f'skipping HR-approval admin email.'
+            )
+            return
+
+        detail_rows = [
+            ('Employee', employee_name),
+            ('Employer', app.employer.name),
+            ('Loan Amount', f'KES {app.principal_amount:,.2f}'),
+            ('Repayment Period', f'{app.repayment_months} months'),
+            ('Application Number', app.application_number),
+            ('Approved By', f'{approver} ({app.employer.name} HR)'),
+        ]
+        if comment:
+            detail_rows.append(('HR Comment', comment))
+
+        subject = f'[Action Required] HR Approved - {employee_name} ({app.application_number})'
+
+        for email, name in recipients:
+            body_html = _hr_email_html(
+                header_color='#27ae60',
+                title='Ready for 254 Capital Approval',
+                greeting_name=name,
+                intro_html=(
+                    f'<p>{approver} of <strong>{app.employer.name}</strong> has approved '
+                    f'the loan application below for their employee.</p>'
+                    f'<p>It is now ready for approval and disbursement by 254 Capital.</p>'
+                ),
+                detail_rows=detail_rows,
+                footer_html=(
+                    '<p style="background-color:#fff3cd;border-left:4px solid #ffc107;'
+                    'padding:10px;border-radius:3px;">'
+                    '<strong>Action required:</strong> Log in to the admin portal to run '
+                    'the credit assessment and disburse this loan.</p>'
+                ),
+            )
+            result = send_email(email, subject, body_html, cc_address=CC_254_CAPITAL)
+            if result.get('success'):
+                logger.info(
+                    f'HR-approval admin email sent to {email} for {app.application_number}'
+                )
+            else:
+                logger.error(
+                    f'Failed to send HR-approval admin email to {email} '
+                    f'for {app.application_number}: {result.get("error")}'
+                )
 
     except Exception as e:
         logger.error(f'Failed to send admin HR-approval notifications: {str(e)}')
