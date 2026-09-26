@@ -434,18 +434,46 @@ def notify_status_change(application_id: str, new_status: str):
             try:
                 title = 'Loan Application Approved' if new_status == 'approved' else 'Loan Application Declined'
                 header_color = '#27ae60' if new_status == 'approved' else '#e74c3c'
+                employee_name = app.employee.get_full_name()
+
+                if new_status == 'approved':
+                    intro_html = (
+                        '<p>Your loan application has been approved by 254 Capital. '
+                        'Please note the following details for your records.</p>'
+                    )
+                    footer_html = (
+                        '<p style="background-color:#e8f5e9;border-left:4px solid #27ae60;'
+                        'padding:10px;border-radius:3px;">'
+                        'Your loan will be disbursed shortly. You will receive a further '
+                        'notification confirming the disbursement and the date your salary '
+                        'deductions commence.</p>'
+                    )
+                else:
+                    intro_html = (
+                        '<p>Your loan application has not been approved on this occasion. '
+                        'The details are below for your records.</p>'
+                    )
+                    footer_html = (
+                        '<p>Please contact your HR department or 254 Capital if you would '
+                        'like to discuss this decision.</p>'
+                    )
+
                 body_html = _hr_email_html(
                     header_color=header_color,
                     title=title,
-                    greeting_name=app.employee.get_full_name() or 'there',
-                    intro_html=f'<p>{message}</p>',
+                    greeting_name=employee_name or 'there',
+                    intro_html=intro_html,
                     detail_rows=[
-                        ('Application Number', app.application_number),
+                        ('Employee', employee_name),
                         ('Loan Amount', f'KES {app.principal_amount:,.2f}'),
+                        ('Repayment Period', f'{app.repayment_months} months'),
+                        ('Application Number', app.application_number),
                         ('Status', new_status.title()),
                     ],
+                    footer_html=footer_html,
                 )
-                result = send_email(app.employee.email, f'{title} - 254 Capital', body_html)
+                subject = f'{title} - {employee_name} ({app.application_number})'
+                result = send_email(app.employee.email, subject, body_html)
                 if result.get('success'):
                     logger.info(f'Status change email sent to {app.employee.email} for {app.application_number}')
                 else:
@@ -597,23 +625,57 @@ def notify_disbursement(application_id: str):
         )
         send_sms(app.employee.phone_number, sms_message)
 
-        # Email the employee with the full disbursement details.
+        # Email the employee with the full disbursement details, mirroring the
+        # layout, labels and deduction-start note used for HR in
+        # notify_hr_disbursement so both sides read the same.
         if app.employee.email:
             try:
+                employee_name = app.employee.get_full_name()
+                disbursement_date_str = (
+                    app.disbursement_date.strftime('%d %B %Y')
+                    if app.disbursement_date else 'N/A'
+                )
+
+                if app.first_deduction_date:
+                    start_month = app.first_deduction_date.strftime('%B %Y')
+                    if app.disbursement_date and app.disbursement_date.day <= 15:
+                        rule_note = 'disbursed on or before the 15th'
+                    else:
+                        rule_note = 'disbursed after the 15th'
+                    deduction_note = (
+                        f'<p style="background-color:#e8f5e9;border-left:4px solid #27ae60;'
+                        f'padding:10px;border-radius:3px;">'
+                        f'<strong>Salary deductions will commence from {start_month}</strong> '
+                        f'({rule_note}). Your first deduction falls due on '
+                        f'{app.first_deduction_date.strftime("%d %B %Y")}.</p>'
+                    )
+                else:
+                    deduction_note = (
+                        '<p>Your salary deductions will be set up with your employer '
+                        'per the agreed check-off schedule.</p>'
+                    )
+
                 body_html = _hr_email_html(
                     header_color='#27ae60',
                     title='Loan Disbursed',
-                    greeting_name=app.employee.get_full_name() or 'there',
-                    intro_html='<p>Good news! Your loan has been disbursed. The details are below.</p>',
+                    greeting_name=employee_name or 'there',
+                    intro_html=(
+                        '<p>Your loan has been disbursed. '
+                        'Please note the following details for your records.</p>'
+                    ),
                     detail_rows=[
-                        ('Application Number', app.application_number),
-                        ('Amount Disbursed', f'KES {app.principal_amount:,.2f}'),
+                        ('Employee', employee_name),
+                        ('Loan Amount Disbursed', f'KES {app.principal_amount:,.2f}'),
+                        ('Disbursement Date', disbursement_date_str),
                         ('Disbursement Method', app.get_disbursement_method_display()),
-                        ('Monthly Deduction', f'KES {app.monthly_deduction:,.2f}'),
-                        ('First Deduction', app.first_deduction_date.strftime('%d %B %Y')),
+                        ('Monthly Installment', f'KES {app.monthly_deduction:,.2f}'),
+                        ('Loan Tenure', f'{app.repayment_months} months'),
+                        ('Application Number', app.application_number),
                     ],
+                    footer_html=deduction_note,
                 )
-                result = send_email(app.employee.email, 'Loan Disbursed - 254 Capital', body_html)
+                subject = f'Loan Disbursed - {employee_name} ({app.application_number})'
+                result = send_email(app.employee.email, subject, body_html)
                 if result.get('success'):
                     logger.info(f'Disbursement email sent to {app.employee.email} for {app.application_number}')
                 else:
