@@ -507,7 +507,10 @@ class DeleteHRUserView(APIView):
             # Check for pending loan reviews
             pending_reviews = LoanApplication.objects.filter(
                 employer=employer,
-                status__in=[LoanApplication.Status.SUBMITTED, LoanApplication.Status.HR_REVIEW]
+                status__in=[
+                    LoanApplication.Status.SUBMITTED,
+                    LoanApplication.Status.UNDER_REVIEW_ADMIN,
+                ]
             ).count()
 
             # Check for active loans

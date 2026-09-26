@@ -382,6 +382,19 @@ class LoanCalculatorView(APIView):
         calc_type = serializer.validated_data['calculation_type']
         annual_rate = serializer.validated_data.get('annual_rate', Decimal('0.05'))
 
+        # When an employer is supplied, their configured terms win over whatever
+        # the client sent. The quote the employee sees must match what
+        # LoanApplicationCreateSerializer will compute on submission, otherwise
+        # they are quoted one monthly deduction and given another.
+        employer_id = serializer.validated_data.get('employer_id')
+        if employer_id:
+            from apps.employers.models import Employer
+
+            employer = Employer.objects.filter(id=employer_id).first()
+            if employer:
+                calc_type = employer.interest_method
+                annual_rate = employer.interest_rate
+
         if calc_type == 'flat':
             result = calculate_flat_interest(principal, annual_rate, months)
 
@@ -626,6 +639,11 @@ class HRReviewApplicationView(APIView):
         from apps.notifications.tasks import notify_status_change
         notify_status_change.delay(str(app.id), app.status)
 
+        # Tell admins the assessment queue has new work
+        if action == 'approve':
+            from apps.notifications.tasks import notify_admins_hr_approved
+            notify_admins_hr_approved.delay(str(app.id))
+
         # Log action
         AuditLog.log(
             action=f'HR {action}: {app.application_number}',
@@ -792,6 +810,10 @@ class HRBatchApprovalView(APIView):
                 # Notify employee
                 from apps.notifications.tasks import notify_status_change
                 notify_status_change.delay(str(app.id), app.status)
+
+                if action == 'approve':
+                    from apps.notifications.tasks import notify_admins_hr_approved
+                    notify_admins_hr_approved.delay(str(app.id))
 
                 processed.append(str(app.id))
 

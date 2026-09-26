@@ -394,13 +394,22 @@ def notify_status_change(application_id: str, new_status: str):
 
         app = LoanApplication.objects.select_related('employee').get(id=application_id)
 
+        # first_deduction_date is only set at disbursement. It must be formatted
+        # defensively because every value in this dict is evaluated on every
+        # call — dereferencing it unguarded raised AttributeError for all
+        # pre-disbursement transitions, so no notification was ever created.
+        first_deduction = (
+            app.first_deduction_date.strftime('%d %B %Y')
+            if app.first_deduction_date else 'the next payroll cycle'
+        )
+
         # Map status to message
         status_messages = {
             'under_review_hr': 'Your application is now under HR review.',
             'under_review_admin': 'Your application has been approved by HR and is now under 254 Capital review.',
             'approved': 'Congratulations! Your loan application has been approved and will be disbursed soon.',
             'declined': 'Your loan application has been declined. Please contact us for more information.',
-            'disbursed': f'Your loan of KES {app.principal_amount:,.2f} has been disbursed. First deduction: {app.first_deduction_date.strftime("%d %B %Y")}.'
+            'disbursed': f'Your loan of KES {app.principal_amount:,.2f} has been disbursed. First deduction: {first_deduction}.'
         }
 
         message = status_messages.get(new_status, 'Your application status has been updated.')
@@ -448,6 +457,49 @@ def notify_status_change(application_id: str, new_status: str):
 
     except Exception as e:
         logger.error(f'Failed to send status change notification: {str(e)}')
+
+
+@shared_task
+def notify_admins_hr_approved(application_id: str):
+    """
+    Notify 254 Capital admins that HR approved an application and it is now
+    waiting on credit assessment.
+
+    notify_status_change only reaches the employee, so without this admins get
+    no in-app signal that their assessment queue has new work.
+
+    Args:
+        application_id: UUID of loan application
+    """
+    try:
+        from apps.loans.models import LoanApplication
+        from apps.accounts.models import CustomUser
+
+        app = LoanApplication.objects.select_related('employee', 'employer').get(id=application_id)
+
+        admin_users = CustomUser.objects.filter(role='admin', is_active=True)
+
+        for admin_user in admin_users:
+            Notification.objects.create(
+                user=admin_user,
+                title='Loan Awaiting Credit Assessment',
+                message=(
+                    f'{app.application_number}: {app.employee.get_full_name()} '
+                    f'({app.employer.name}) was approved by HR for '
+                    f'KES {app.principal_amount:,.2f} and is awaiting 254 Capital '
+                    f'credit assessment.'
+                ),
+                link='/admin/loan-queue',
+                notification_type=Notification.NotificationType.STATUS_UPDATE
+            )
+
+        logger.info(
+            f'Admin HR-approval notifications created for {application_id} '
+            f'({admin_users.count()} admin(s))'
+        )
+
+    except Exception as e:
+        logger.error(f'Failed to send admin HR-approval notifications: {str(e)}')
 
 
 @shared_task
