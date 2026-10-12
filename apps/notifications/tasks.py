@@ -534,24 +534,18 @@ def notify_admins_hr_approved(application_id: str, hr_name: str = '', comment: s
         except Exception as e:
             logger.error(f'Failed to create admin HR-approval in-app notifications: {e}')
 
-        # Email the 254 Capital admin inbox(es) directly, then every admin
-        # account. The inbox must be a direct recipient: admin login emails
-        # are often not monitored mailboxes, and when the inbox was only a
-        # CC on those messages the alert never reached the admin team.
+        # Email the 254 Capital admin inbox(es) from settings only. Admin
+        # login accounts are deliberately not emailed: their addresses are
+        # personal/login addresses, not the inbox the admin team reads.
         recipients = []
-        seen = set()
-        for email, name in (
-            [(e, 'Admin') for e in settings.ADMIN_NOTIFICATION_EMAILS]
-            + [(u.email, u.get_full_name() or 'Admin') for u in admin_users]
-        ):
+        for email in settings.ADMIN_NOTIFICATION_EMAILS:
             email = (email or '').strip()
-            if email and email.lower() not in seen:
-                seen.add(email.lower())
-                recipients.append((email, name))
+            if email and email.lower() not in {r.lower() for r in recipients}:
+                recipients.append(email)
         if not recipients:
             logger.warning(
-                f'No admin email address found for {app.application_number}; '
-                f'skipping HR-approval admin email.'
+                f'ADMIN_NOTIFICATION_EMAILS is empty; skipping HR-approval '
+                f'admin email for {app.application_number}.'
             )
             return
 
@@ -567,12 +561,14 @@ def notify_admins_hr_approved(application_id: str, hr_name: str = '', comment: s
             detail_rows.append(('HR Comment', comment))
 
         subject = f'[Action Required] HR Approved - {employee_name} ({app.application_number})'
+        # Keep 254 Capital's record copy, as on the other HR notifications.
+        cc = None if CC_254_CAPITAL.lower() in {r.lower() for r in recipients} else CC_254_CAPITAL
 
-        for email, name in recipients:
+        for email in recipients:
             body_html = _hr_email_html(
                 header_color='#27ae60',
                 title='Ready for 254 Capital Approval',
-                greeting_name=name,
+                greeting_name='Admin',
                 intro_html=(
                     f'<p>{approver} of <strong>{app.employer.name}</strong> has approved '
                     f'the loan application below for their employee.</p>'
@@ -586,7 +582,7 @@ def notify_admins_hr_approved(application_id: str, hr_name: str = '', comment: s
                     'the credit assessment and disburse this loan.</p>'
                 ),
             )
-            result = send_email(email, subject, body_html)
+            result = send_email(email, subject, body_html, cc_address=cc)
             if result.get('success'):
                 logger.info(
                     f'HR-approval admin email sent to {email} for {app.application_number}'
