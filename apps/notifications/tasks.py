@@ -511,32 +511,43 @@ def notify_admins_hr_approved(application_id: str, hr_name: str = '', comment: s
         employee_name = app.employee.get_full_name()
         approver = hr_name or 'The HR team'
 
-        for admin_user in admin_users:
-            Notification.objects.create(
-                user=admin_user,
-                title='Loan Awaiting Credit Assessment',
-                message=(
-                    f'{app.application_number}: {employee_name} '
-                    f'({app.employer.name}) was approved by HR for '
-                    f'KES {app.principal_amount:,.2f} and is awaiting 254 Capital '
-                    f'credit assessment.'
-                ),
-                link='/admin/loan-queue',
-                notification_type=Notification.NotificationType.STATUS_UPDATE
+        # A failure here must not stop the emails below from going out.
+        try:
+            for admin_user in admin_users:
+                Notification.objects.create(
+                    user=admin_user,
+                    title='Loan Awaiting Credit Assessment',
+                    message=(
+                        f'{app.application_number}: {employee_name} '
+                        f'({app.employer.name}) was approved by HR for '
+                        f'KES {app.principal_amount:,.2f} and is awaiting 254 Capital '
+                        f'credit assessment.'
+                    ),
+                    link='/admin/loan-queue',
+                    notification_type=Notification.NotificationType.STATUS_UPDATE
+                )
+
+            logger.info(
+                f'Admin HR-approval notifications created for {application_id} '
+                f'({admin_users.count()} admin(s))'
             )
+        except Exception as e:
+            logger.error(f'Failed to create admin HR-approval in-app notifications: {e}')
 
-        logger.info(
-            f'Admin HR-approval notifications created for {application_id} '
-            f'({admin_users.count()} admin(s))'
-        )
-
-        # Email the same admins. Addresses come from the admin accounts
-        # themselves rather than a hard-coded alias, so adding an admin is
-        # enough to put them on these alerts.
-        recipients = [
-            (u.email, u.get_full_name() or 'Admin')
-            for u in admin_users if u.email
-        ]
+        # Email the 254 Capital admin inbox(es) directly, then every admin
+        # account. The inbox must be a direct recipient: admin login emails
+        # are often not monitored mailboxes, and when the inbox was only a
+        # CC on those messages the alert never reached the admin team.
+        recipients = []
+        seen = set()
+        for email, name in (
+            [(e, 'Admin') for e in settings.ADMIN_NOTIFICATION_EMAILS]
+            + [(u.email, u.get_full_name() or 'Admin') for u in admin_users]
+        ):
+            email = (email or '').strip()
+            if email and email.lower() not in seen:
+                seen.add(email.lower())
+                recipients.append((email, name))
         if not recipients:
             logger.warning(
                 f'No admin email address found for {app.application_number}; '
@@ -575,7 +586,7 @@ def notify_admins_hr_approved(application_id: str, hr_name: str = '', comment: s
                     'the credit assessment and disburse this loan.</p>'
                 ),
             )
-            result = send_email(email, subject, body_html, cc_address=CC_254_CAPITAL)
+            result = send_email(email, subject, body_html)
             if result.get('success'):
                 logger.info(
                     f'HR-approval admin email sent to {email} for {app.application_number}'
