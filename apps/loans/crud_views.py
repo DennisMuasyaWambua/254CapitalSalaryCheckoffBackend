@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
+from django.db import transaction
 from django.db.models import Sum
 from decimal import Decimal
 import logging
@@ -69,26 +70,39 @@ class UpdateLoanView(APIView):
             loan.disbursement_method = request.data['disbursement_method']
             changed_fields.append('disbursement_method')
 
+        amounts_changed = any(
+            field in ['principal_amount', 'interest_rate', 'repayment_months'] for field in changed_fields
+        )
+
+        # Regenerating the schedule deletes existing installments, so refuse
+        # once any have been paid rather than silently losing payment records
+        regenerate_schedule = amounts_changed and loan.first_deduction_date is not None
+        if regenerate_schedule and loan.repayment_schedule.filter(is_paid=True).exists():
+            return Response(
+                {'error': 'Cannot change amount, rate or tenure: this loan already has paid installments'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Recalculate loan amounts if principal, rate, or months changed
-        if any(field in ['principal_amount', 'interest_rate', 'repayment_months'] for field in changed_fields):
+        if amounts_changed:
             from .services import calculate_loan_for_employer
 
-            # Get employer's interest method
-            employer = loan.employer
-            interest_method = getattr(employer, 'interest_method', 'flat') if employer else 'flat'
-
+            # Use the method the loan was originated with, not the employer's current setting
             calculation = calculate_loan_for_employer(
                 principal=loan.principal_amount,
                 months=loan.repayment_months,
-                interest_method=interest_method,
+                interest_method=loan.interest_method,
                 monthly_rate=loan.interest_rate
             )
 
-            loan.interest_amount = calculation['interest_amount']
             loan.total_repayment = calculation['total_repayment']
             loan.monthly_deduction = calculation['monthly_deduction']
 
-        loan.save()
+        with transaction.atomic():
+            loan.save()
+            if regenerate_schedule:
+                from .services import generate_repayment_schedule
+                generate_repayment_schedule(loan)
 
         # Log action
         AuditLog.log(
@@ -97,7 +111,7 @@ class UpdateLoanView(APIView):
             target_type='LoanApplication',
             target_id=loan.id,
             ip_address=get_client_ip(request),
-            details=f'Updated fields: {", ".join(changed_fields)}'
+            metadata={'updated_fields': changed_fields}
         )
 
         logger.info(f'Loan {loan.id} updated by admin {request.user.email}')
@@ -112,7 +126,7 @@ class UpdateLoanView(APIView):
                 'monthly_deduction': str(loan.monthly_deduction),
                 'updated_at': timezone.now().isoformat()
             },
-            'repayment_schedule_updated': True,
+            'repayment_schedule_updated': regenerate_schedule,
             'modification_logged': True
         }, status=status.HTTP_200_OK)
 
