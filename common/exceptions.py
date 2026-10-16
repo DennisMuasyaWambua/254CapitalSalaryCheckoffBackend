@@ -52,6 +52,15 @@ def custom_exception_handler(exc, context):
 
             custom_response_data['errors'] = errors
 
+            # Surface the first concrete reason so clients that only display
+            # `detail` show something actionable instead of "Validation error"
+            first_message = next(
+                (msgs[0] for msgs in errors.values() if msgs and isinstance(msgs[0], str)),
+                None
+            )
+            if first_message:
+                custom_response_data['detail'] = first_message
+
         # Handle other DRF exceptions
         elif hasattr(exc, 'detail'):
             if isinstance(exc.detail, dict):

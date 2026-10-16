@@ -239,6 +239,15 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
         allow_blank=True,
         help_text='Bank account number for disbursement'
     )
+    # The frontend sends the account number under the same name as the
+    # EmployeeProfile field, so accept it as an alias of account_number
+    bank_account_number = serializers.CharField(
+        max_length=50,
+        required=False,
+        allow_blank=True,
+        write_only=True,
+        help_text='Alias of account_number'
+    )
 
     def validate_principal_amount(self, value):
         """Validate principal amount is a multiple of 100."""
@@ -256,6 +265,10 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         """Additional validation for loan affordability and eligibility."""
+        alias = attrs.pop('bank_account_number', '')
+        if not attrs.get('account_number') and alias:
+            attrs['account_number'] = alias
+
         # Validate bank details if disbursement method is 'bank'
         if attrs.get('disbursement_method') == 'bank':
             if not attrs.get('bank_name'):
