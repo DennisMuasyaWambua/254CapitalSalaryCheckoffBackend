@@ -16,9 +16,16 @@ from .generators import (
     generate_loan_book_report_data,
     generate_disbursement_report_excel,
 )
+from .application_export import (
+    build_application_record,
+    generate_application_excel,
+    generate_application_pdf,
+)
 from apps.accounts.permissions import IsHROrAdmin, IsAdmin
+from apps.audit.models import AuditLog
 from apps.loans.models import LoanApplication, RepaymentSchedule
 from apps.loans.services import calculate_first_deduction_date, should_appear_in_collection_sheet
+from common.utils import get_client_ip
 import logging
 
 logger = logging.getLogger(__name__)
@@ -295,6 +302,57 @@ class RepaymentPDFExportView(APIView):
 
         logger.info(f'Repayment PDF generated for {application.application_number}')
 
+        return response
+
+
+class LoanApplicationExportView(APIView):
+    """
+    GET /api/v1/exports/loan-application/<uuid:application_id>/pdf/
+    GET /api/v1/exports/loan-application/<uuid:application_id>/excel/
+
+    Admin download of one loan application: applicant, employment, loan and
+    disbursement details, status history, documents, repayment schedule, and
+    the full Terms & Conditions the employee accepted with the acceptance
+    record. Available for applications in any status. Every export is
+    audit-logged because the file carries the applicant's personal data.
+    """
+
+    permission_classes = [IsAuthenticated, IsAdmin]
+    export_format = None  # set per route: 'pdf' or 'excel'
+
+    FORMATS = {
+        'pdf': (generate_application_pdf, 'application/pdf', 'pdf'),
+        'excel': (
+            generate_application_excel,
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'xlsx',
+        ),
+    }
+
+    def get(self, request, application_id):
+        try:
+            loan = LoanApplication.objects.select_related(
+                'employee', 'employee__employee_profile', 'employer'
+            ).get(id=application_id)
+        except LoanApplication.DoesNotExist:
+            return Response({'detail': 'Application not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        generate, content_type, extension = self.FORMATS[self.export_format]
+        content = generate(build_application_record(loan, generated_by=request.user))
+
+        AuditLog.log(
+            action=f'Loan application exported ({self.export_format}): {loan.application_number}',
+            actor=request.user,
+            target_type='LoanApplication',
+            target_id=loan.id,
+            metadata={'format': self.export_format},
+            ip_address=get_client_ip(request),
+        )
+
+        response = HttpResponse(content, content_type=content_type)
+        response['Content-Disposition'] = (
+            f'attachment; filename="Loan_Application_{loan.application_number}.{extension}"'
+        )
         return response
 
 

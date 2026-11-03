@@ -280,8 +280,9 @@ def generate_repayment_schedule_pdf(loan_application) -> BytesIO:
             'generated_date': datetime.now().strftime('%d %B %Y'),
         }
 
-        # HTML template
-        html_string = """
+        # HTML template. intcomma needs humanize loaded, otherwise every render
+        # fails with "Invalid filter: 'intcomma'".
+        html_string = """{% load humanize %}
 <!DOCTYPE html>
 <html>
 <head>

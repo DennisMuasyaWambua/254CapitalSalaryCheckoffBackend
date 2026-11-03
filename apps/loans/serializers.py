@@ -201,10 +201,17 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
         max_digits=12,
         decimal_places=2,
         min_value=Decimal(str(settings.LOAN_MIN_AMOUNT)),
-        max_value=Decimal(str(settings.LOAN_MAX_AMOUNT))
+        max_value=Decimal(str(settings.LOAN_MAX_AMOUNT)),
+        error_messages={
+            'min_value': f'The minimum loan amount is KES {settings.LOAN_MIN_AMOUNT:,}.',
+            'max_value': f'The maximum loan amount is KES {settings.LOAN_MAX_AMOUNT:,}.',
+        }
     )
     repayment_months = serializers.IntegerField(
-        min_value=settings.LOAN_MIN_REPAYMENT_MONTHS
+        min_value=settings.LOAN_MIN_REPAYMENT_MONTHS,
+        error_messages={
+            'min_value': f'Repayment period must be at least {settings.LOAN_MIN_REPAYMENT_MONTHS} month.',
+        }
     )
     disbursement_method = serializers.ChoiceField(
         choices=LoanApplication.DisbursementMethod.choices,
@@ -252,7 +259,7 @@ class LoanApplicationCreateSerializer(serializers.Serializer):
     def validate_principal_amount(self, value):
         """Validate principal amount is a multiple of 100."""
         if value % 100 != 0:
-            raise serializers.ValidationError('Amount must be a multiple of 100.')
+            raise serializers.ValidationError('The loan amount must be a multiple of KES 100.')
         return value
 
     def validate_terms_accepted(self, value):

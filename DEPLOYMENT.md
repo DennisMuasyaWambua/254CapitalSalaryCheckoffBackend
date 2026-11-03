@@ -212,7 +212,7 @@ server {
     listen 80;
     server_name your-domain.com;
 
-    client_max_body_size 10M;
+    client_max_body_size 55M;  # 5 loan documents x 10 MB
 
     location / {
         proxy_pass http://salary_checkoff_app;

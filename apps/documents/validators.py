@@ -18,6 +18,9 @@ def validate_file_size(file):
     Raises:
         ValidationError: If file size exceeds limit
     """
+    if not file.size:
+        raise ValidationError('The file is empty. Please choose the file again.')
+
     max_size = settings.MAX_UPLOAD_SIZE
     if file.size > max_size:
         max_size_mb = max_size / (1024 * 1024)
@@ -40,10 +43,9 @@ def validate_file_extension(file):
     """
     ext = os.path.splitext(file.name)[1].lower()
     if ext not in settings.ALLOWED_DOCUMENT_EXTENSIONS:
-        raise ValidationError(
-            f'File extension {ext} is not allowed. '
-            f'Allowed extensions: {", ".join(settings.ALLOWED_DOCUMENT_EXTENSIONS)}'
-        )
+        allowed = ', '.join(e.lstrip('.').upper() for e in settings.ALLOWED_DOCUMENT_EXTENSIONS)
+        found = f'{ext} files are' if ext else 'Files without an extension are'
+        raise ValidationError(f'{found} not accepted. Please upload a {allowed} file.')
 
 
 def validate_file_mime_type(file):

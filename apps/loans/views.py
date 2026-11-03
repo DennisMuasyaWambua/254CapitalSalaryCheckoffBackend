@@ -37,10 +37,47 @@ from common.pagination import StandardPagination
 from common.utils import get_client_ip
 from common.email_service import send_email, send_internal_alert
 from apps.audit.models import AuditLog
+from apps.documents.models import Document
 from apps.documents.serializers import DocumentUploadSerializer
+from apps.documents.validators import validate_document_file
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework.exceptions import ValidationError
+from .terms import CURRENT_TERMS_VERSION
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# Files sent with a loan application: (form field == document_type, required)
+SUPPORTING_DOCUMENTS = (
+    ('national_id_front', True),
+    ('national_id_back', True),
+    ('payslip_1', True),
+    ('payslip_2', False),
+    ('payslip_3', False),
+)
+
+
+def _supporting_document_errors(files):
+    """
+    Validate a loan application's uploads, keyed by form field.
+
+    Each message is prefixed with the document's name ("National ID (Front):
+    ...") so the employee knows which upload to replace.
+    """
+    errors = {}
+    for doc_type, required in SUPPORTING_DOCUMENTS:
+        label = Document.DocumentType(doc_type).label
+        uploaded = files.get(doc_type)
+        if uploaded is None:
+            if required:
+                errors[doc_type] = [f'{label} is required.']
+            continue
+        try:
+            validate_document_file(uploaded)
+        except DjangoValidationError as exc:
+            errors[doc_type] = [f'{label}: {message}' for message in exc.messages]
+    return errors
 
 
 class LoanApplicationListCreateView(APIView):
@@ -84,7 +121,21 @@ class LoanApplicationListCreateView(APIView):
             data=request.data,
             context={'request': request}
         )
-        serializer.is_valid(raise_exception=True)
+
+        # Check the form and every supporting document before creating
+        # anything, and report all problems in one response, each keyed to
+        # the field or document it concerns. Document errors used to surface
+        # one at a time, after the loan row existed, under a generic "file"
+        # key, so employees could not tell which upload was rejected.
+        errors = {} if serializer.is_valid() else dict(serializer.errors)
+        errors.update(_supporting_document_errors(request.FILES))
+        if errors:
+            logger.warning(
+                'Loan application rejected for user %s: %s',
+                request.user.id,
+                {field: [str(m) for m in msgs] for field, msgs in errors.items()},
+            )
+            raise ValidationError(errors)
 
         # Get employee profile
         employee_profile = request.user.employee_profile
@@ -102,21 +153,7 @@ class LoanApplicationListCreateView(APIView):
             Decimal(str(interest_rate))  # Use employer's interest rate
         )
 
-        # Supporting documents are mandatory. Validate their presence BEFORE
-        # creating anything so an application is never submitted without them.
-        # Optional extra payslips (payslip_2, payslip_3) are accepted if sent.
         files = request.FILES
-        required_docs = ['national_id_front', 'national_id_back', 'payslip_1']
-        optional_docs = ['payslip_2', 'payslip_3']
-        missing = [key for key in required_docs if key not in files]
-        if missing:
-            return Response(
-                {'detail': (
-                    'Required documents are missing. Please attach National ID '
-                    '(front and back) and at least one payslip before submitting.'
-                ), 'missing_documents': missing},
-                status=status.HTTP_400_BAD_REQUEST
-            )
 
         # Generate application number
         app_number = generate_application_number()
@@ -143,6 +180,7 @@ class LoanApplicationListCreateView(APIView):
                 status=LoanApplication.Status.SUBMITTED,
                 terms_accepted=serializer.validated_data['terms_accepted'],
                 terms_accepted_at=timezone.now() if serializer.validated_data['terms_accepted'] else None,
+                terms_version=CURRENT_TERMS_VERSION,
                 # Bank details for disbursement
                 bank_name=serializer.validated_data.get('bank_name', ''),
                 bank_branch=serializer.validated_data.get('bank_branch', ''),
@@ -157,10 +195,10 @@ class LoanApplicationListCreateView(APIView):
                 comment='Application submitted'
             )
 
-            # Attach each supplied document, linked to this application. Reuse
-            # the document upload serializer so the same validation (type, size,
-            # mime) applies. A failure here aborts the whole submission.
-            for doc_type in required_docs + optional_docs:
+            # Attach each supplied document, linked to this application. The
+            # files were checked up front; the upload serializer re-validates,
+            # and any failure here still aborts the whole submission.
+            for doc_type, _required in SUPPORTING_DOCUMENTS:
                 uploaded = files.get(doc_type)
                 if not uploaded:
                     continue

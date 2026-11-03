@@ -160,6 +160,13 @@ class LoanApplication(models.Model):
         blank=True,
         help_text='When the employee accepted the terms and conditions'
     )
+    # Key into apps.loans.terms.TERMS_VERSIONS. Blank on loans submitted
+    # before versions were recorded; resolve_terms_for_loan() infers those.
+    terms_version = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text='Version of the terms and conditions the employee accepted'
+    )
 
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)

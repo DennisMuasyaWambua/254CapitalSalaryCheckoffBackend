@@ -38,6 +38,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # intcomma in the repayment schedule PDF template
+    'django.contrib.humanize',
 
     # Third-party apps
     'rest_framework',
@@ -350,7 +352,11 @@ LOAN_MIN_REPAYMENT_MONTHS = 1
 PAYROLL_DEDUCTION_DAY = 25  # 25th of each month
 
 # Document Upload Settings
-MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5 MB
+# Per-file limit. Phone-camera photos of a National ID are routinely 5-8 MB,
+# so a 5 MB cap rejected ordinary applications. A loan submission carries up
+# to five files in one request, so nginx's client_max_body_size must allow
+# roughly five times this value (see nginx.conf).
+MAX_UPLOAD_SIZE = env.int('MAX_UPLOAD_SIZE_MB', default=10) * 1024 * 1024
 ALLOWED_DOCUMENT_TYPES = ['application/pdf', 'image/jpeg', 'image/png']
 ALLOWED_DOCUMENT_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png']
 

@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Loan Application {{ application_number }}</title>
+<style>
+    @page {
+        size: A4;
+        margin: 1.6cm 1.5cm 1.8cm;
+        @bottom-left {
+            content: "254 Capital · Loan Application {{ application_number }}";
+            font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8pt; color: #777;
+        }
+        @bottom-right {
+            content: "Page " counter(page) " of " counter(pages);
+            font-family: "DejaVu Sans", Arial, sans-serif; font-size: 8pt; color: #777;
+        }
+    }
+    body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 9.5pt; color: #222; line-height: 1.45; }
+    .header { border-bottom: 3px solid #3F2A56; padding-bottom: 10px; margin-bottom: 18px; }
+    .header h1 { color: #3F2A56; font-size: 18pt; margin: 0; }
+    .header .subtitle { color: #00838F; font-size: 12pt; margin: 2px 0 6px; }
+    .header .meta { font-size: 8.5pt; color: #555; }
+    h2 { color: #3F2A56; font-size: 11.5pt; margin: 18px 0 6px; border-bottom: 1px solid #ddd; padding-bottom: 3px; }
+    table { width: 100%; border-collapse: collapse; }
+    table.kv td { padding: 4px 6px; vertical-align: top; border-bottom: 1px solid #eee; }
+    table.kv td.label { width: 32%; font-weight: bold; color: #444; }
+    table.grid th { background: #3F2A56; color: #fff; text-align: left; padding: 5px 6px; font-size: 8.5pt; }
+    table.grid td { padding: 4px 6px; border-bottom: 1px solid #e5e5e5; font-size: 8.5pt; vertical-align: top; }
+    table.grid tr:nth-child(even) td { background: #f8f8f8; }
+    .num { text-align: right; white-space: nowrap; }
+    .section { page-break-inside: avoid; }
+    .terms { page-break-before: always; }
+    .terms h3 { font-size: 10pt; margin: 12px 0 4px; color: #222; }
+    .terms p { margin: 0 0 6px; text-align: justify; }
+    .terms ul { margin: 0 0 6px 18px; padding: 0; }
+    .acceptance { background: #EEF7F7; border: 1px solid #99CCCC; padding: 8px 10px; margin-bottom: 12px; }
+    .acceptance table.kv td { border-bottom: none; padding: 2px 4px; }
+    .intro { font-style: italic; color: #00838F; }
+    .footer-note { margin-top: 14px; font-size: 8pt; color: #666; }
+    .empty { color: #777; font-style: italic; }
+</style>
+</head>
+<body>
+    <div class="header">
+        <h1>254 CAPITAL</h1>
+        <div class="subtitle">Loan Application Record</div>
+        <div class="meta">
+            {{ application_number }} · {{ employee_name }} · Status: {{ status }}<br>
+            Generated {{ generated_at }} by {{ generated_by }}
+        </div>
+    </div>
+
+    {% for heading, rows in sections %}
+    <div class="section">
+        <h2>{{ heading }}</h2>
+        <table class="kv">
+            {% for label, value in rows %}
+            <tr><td class="label">{{ label }}</td><td>{{ value }}</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endfor %}
+
+    <div class="section">
+        <h2>Status History</h2>
+        {% if status_history %}
+        <table class="grid">
+            <thead><tr><th>Date</th><th>Status</th><th>By</th><th>Comment</th></tr></thead>
+            <tbody>
+            {% for h in status_history %}
+            <tr><td>{{ h.date }}</td><td>{{ h.status }}</td><td>{{ h.actor }}</td><td>{{ h.comment }}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}<p class="empty">No status changes recorded.</p>{% endif %}
+    </div>
+
+    <div class="section">
+        <h2>Supporting Documents</h2>
+        {% if documents %}
+        <table class="grid">
+            <thead><tr><th>Document</th><th>File Name</th><th>Uploaded</th></tr></thead>
+            <tbody>
+            {% for d in documents %}
+            <tr><td>{{ d.type }}</td><td>{{ d.filename }}</td><td>{{ d.uploaded_at }}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}<p class="empty">No documents on file.</p>{% endif %}
+    </div>
+
+    {% if schedule %}
+    <h2>Repayment Schedule</h2>
+    <table class="grid">
+        <thead><tr><th>#</th><th>Due Date</th><th class="num">Amount</th><th class="num">Running Balance</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for r in schedule %}
+        <tr><td>{{ r.number }}</td><td>{{ r.due_date }}</td><td class="num">{{ r.amount }}</td><td class="num">{{ r.running_balance }}</td><td>{{ r.paid }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <div class="terms">
+        {% if terms %}
+        <h2>{{ terms.title }}</h2>
+        <div class="acceptance">
+            <table class="kv">
+                {% for heading, rows in sections %}{% if heading == "Terms & Conditions Acceptance" %}
+                {% for label, value in rows %}
+                <tr><td class="label">{{ label }}</td><td>{{ value }}</td></tr>
+                {% endfor %}
+                {% endif %}{% endfor %}
+            </table>
+        </div>
+        <p class="intro">{{ terms.intro }}</p>
+        {% for section in terms.sections %}
+        <h3>{{ section.heading }}</h3>
+        {% for p in section.paragraphs %}<p>{{ p }}</p>{% endfor %}
+        {% if section.bullets %}<ul>{% for b in section.bullets %}<li>{{ b }}</li>{% endfor %}</ul>{% endif %}
+        {% for p in section.closing %}<p>{{ p }}</p>{% endfor %}
+        {% endfor %}
+        <p class="footer-note">{{ terms.footer }}</p>
+        {% else %}
+        <h2>Terms &amp; Conditions</h2>
+        <p class="empty">The applicant did not accept the Terms &amp; Conditions for this application.</p>
+        {% endif %}
+    </div>
+</body>
+</html>
