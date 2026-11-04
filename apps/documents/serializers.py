@@ -5,6 +5,7 @@ Serializers for document uploads and management.
 from rest_framework import serializers
 from django.conf import settings
 from .models import Document
+from .file_access import local_file_url
 import magic
 import os
 
@@ -50,7 +51,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             if request:
                 # For local storage
                 if not settings.USE_S3:
-                    return request.build_absolute_uri(obj.file.url)
+                    return local_file_url(request, obj)
                 else:
                     # For S3, generate presigned URL
                     try:
@@ -223,9 +224,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
             return None
         request = self.context.get('request')
         if not settings.USE_S3:
-            if request:
-                return request.build_absolute_uri(obj.file.url)
-            return obj.file.url
+            return local_file_url(request, obj)
         # S3: presigned URL
         try:
             from django.core.files.storage import default_storage

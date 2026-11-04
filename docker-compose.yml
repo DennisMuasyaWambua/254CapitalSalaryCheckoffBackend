@@ -50,6 +50,9 @@ services:
     env_file:
       - .env
     environment:
+      # Overrides USE_S3 from .env: the AWS key on the server is invalid, so
+      # documents are stored under ./media (the ./media volume) until it is fixed.
+      - USE_S3=False
       - DATABASE_URL=postgresql://${DB_USER:-salary_checkoff_user}:${DB_PASSWORD}@db:5432/salary_checkoff_db
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -82,6 +85,9 @@ services:
     env_file:
       - .env
     environment:
+      # Overrides USE_S3 from .env: the AWS key on the server is invalid, so
+      # documents are stored under ./media (the ./media volume) until it is fixed.
+      - USE_S3=False
       - DATABASE_URL=postgresql://${DB_USER:-salary_checkoff_user}:${DB_PASSWORD}@db:5432/salary_checkoff_db
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -107,6 +113,9 @@ services:
     env_file:
       - .env
     environment:
+      # Overrides USE_S3 from .env: the AWS key on the server is invalid, so
+      # documents are stored under ./media (the ./media volume) until it is fixed.
+      - USE_S3=False
       - DATABASE_URL=postgresql://${DB_USER:-salary_checkoff_user}:${DB_PASSWORD}@db:5432/salary_checkoff_db
       - REDIS_URL=redis://redis:6379/0
       - CELERY_BROKER_URL=redis://redis:6379/0

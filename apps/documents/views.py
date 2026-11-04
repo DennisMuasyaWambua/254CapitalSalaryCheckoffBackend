@@ -5,10 +5,12 @@ Document upload and management APIViews.
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.conf import settings
+from django.http import FileResponse
 
 from .models import Document
+from .file_access import read_file_token
 from .serializers import DocumentSerializer, DocumentUploadSerializer, DocumentListSerializer
 from apps.loans.models import LoanApplication
 from common.utils import get_client_ip
@@ -265,3 +267,44 @@ class EmployerDocumentsView(APIView):
 
         serializer = DocumentListSerializer(documents, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class DocumentFileView(APIView):
+    """
+    GET /api/v1/documents/file/<token>/ - stream a locally stored document.
+
+    The signed, expiring token in the URL is the credential (see file_access),
+    so no login is needed and the browser can load it directly in an <img> or
+    <iframe>. Tokens are only issued to users already allowed to see the
+    document. Add ?download=1 to force a download instead of inline display.
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = []
+
+    def get(self, request, token):
+        document_id = read_file_token(token)
+        document = Document.objects.filter(pk=document_id).first() if document_id else None
+        if document is None or not document.file:
+            return Response(
+                {'detail': 'This link is invalid or has expired. Please reload the page.', 'code': 'not_found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        try:
+            handle = document.file.open('rb')
+        except (FileNotFoundError, OSError):
+            logger.error('Document %s is missing from storage: %s', document.pk, document.file.name)
+            return Response(
+                {'detail': 'The file is not available.', 'code': 'not_found'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        response = FileResponse(
+            handle,
+            content_type=document.mime_type or 'application/octet-stream',
+            as_attachment=request.query_params.get('download') == '1',
+            filename=document.original_filename,
+        )
+        response['Cache-Control'] = 'private, no-store'
+        response['X-Content-Type-Options'] = 'nosniff'
+        return response
