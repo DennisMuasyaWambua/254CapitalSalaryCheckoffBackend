@@ -320,7 +320,11 @@ if USE_S3:
     AWS_DEFAULT_ACL = 'private'
     AWS_QUERYSTRING_AUTH = True
     AWS_QUERYSTRING_EXPIRE = 3600  # 1 hour
-    AWS_S3_FILE_OVERWRITE = False
+    # Object keys are random UUIDs (documents.models.document_upload_path), so
+    # names never collide. True skips the HeadObject "does this name exist?"
+    # call before every upload, which returns 403 when the IAM user lacks
+    # s3:ListBucket and made every loan application fail with a 500.
+    AWS_S3_FILE_OVERWRITE = True
 
     # Use S3 for media files
     DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
