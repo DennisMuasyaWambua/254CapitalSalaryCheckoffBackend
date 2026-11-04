@@ -98,6 +98,14 @@ def custom_exception_handler(exc, context):
                 'detail': 'An unexpected error occurred. Please try again later.',
                 'code': 'server_error'
             }
+            # TEMPORARY DIAGNOSTIC: the production server log is not reachable,
+            # so show the real exception to the internal test employee only.
+            # Remove once the loan application 500 is resolved.
+            request = context.get('request') if context else None
+            user = getattr(request, 'user', None)
+            phone = getattr(user, 'phone_number', '') or ''
+            if getattr(user, 'is_authenticated', False) and phone.endswith('712121329'):
+                custom_response_data['debug'] = f'{type(exc).__name__}: {str(exc)[:400]}'
             response = Response(custom_response_data, status=500)
 
     return response
