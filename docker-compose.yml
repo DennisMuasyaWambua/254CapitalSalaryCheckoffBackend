@@ -39,7 +39,8 @@ services:
     image: ${DOCKER_IMAGE:-salary-checkoff-backend}:${DOCKER_TAG:-latest}
     container_name: salary_checkoff_web
     restart: always
-    command: gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 --access-logfile - --error-logfile - config.wsgi:application
+    # No `command:` here on purpose. The image's CMD (start.sh) applies migrations
+    # before starting gunicorn, and overriding it skips them on every deploy.
     ports:
       - "8000:8000"
     volumes:

@@ -14,4 +14,4 @@ if [ "$SEED_DATA" = "true" ]; then
 fi
 
 echo "Starting gunicorn server..."
-exec gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 config.wsgi:application
+exec gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 120 --access-logfile - --error-logfile - config.wsgi:application

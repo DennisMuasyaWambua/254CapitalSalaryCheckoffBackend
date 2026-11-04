@@ -154,6 +154,14 @@ jobs:
             echo "📊 Migrations applied during container boot:"
             docker-compose logs web 2>/dev/null | grep -iE "Applying |No migrations" | tail -20 || true
 
+            # migrate always prints one of these. If neither appears, the web
+            # container started without running start.sh, so new migrations were
+            # skipped and code that needs them will return 500s. Fail the deploy.
+            if ! docker-compose logs web 2>/dev/null | grep -qiE "Applying |No migrations"; then
+              echo "❌ The web container did not run migrations. Check the 'command:' in the server's docker-compose.yml."
+              exit 1
+            fi
+
             echo "🎉 Deployment completed successfully!"
 
   notify:
