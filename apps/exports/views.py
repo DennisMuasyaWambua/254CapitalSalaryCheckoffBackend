@@ -6,7 +6,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
-from django.http import HttpResponse
+from rest_framework.exceptions import ValidationError
+from django.http import HttpResponse, StreamingHttpResponse
 from datetime import date
 from decimal import Decimal
 
@@ -21,6 +22,7 @@ from .application_export import (
     generate_application_excel,
     generate_application_pdf,
 )
+from . import application_list_export as bulk_export
 from apps.accounts.permissions import IsHROrAdmin, IsAdmin
 from apps.audit.models import AuditLog
 from apps.loans.models import LoanApplication, RepaymentSchedule
@@ -685,4 +687,120 @@ class DisbursementReportExcelView(APIView):
 
         logger.info(f'Disbursement report Excel exported for {employer_name} ({from_date} to {to_date})')
 
+        return response
+
+
+class LoanApplicationsExportSummaryView(APIView):
+    """
+    GET /api/v1/exports/loan-applications/summary/
+
+    What an export with these filters would contain, plus the options for the
+    filter controls. Uses the same filtering as the file endpoints, so the
+    count shown in the UI is the number of rows the file will have.
+
+    Query params (all optional): employer_id (admins only), status,
+    from_date, to_date (YYYY-MM-DD, inclusive, submitted date, Africa/Nairobi).
+    """
+
+    permission_classes = [IsAuthenticated, IsHROrAdmin]
+
+    def get(self, request):
+        from apps.employers.models import Employer
+
+        filters = bulk_export.parse_export_filters(request)
+        summary = bulk_export.summarize(filters)
+
+        if filters.employer_locked:
+            employers = [filters.employer]
+        else:
+            employers = Employer.objects.order_by('name').only('id', 'name', 'is_active')
+
+        return Response({
+            'count': summary['count'],
+            'total_principal': str(summary['total_principal']),
+            'by_status': [
+                {**s, 'principal': str(s['principal'])} for s in summary['by_status']
+            ],
+            'filters': filters.as_metadata(),
+            'employer_locked': filters.employer_locked,
+            'employers': [
+                {'id': str(e.id), 'name': e.name, 'is_active': e.is_active} for e in employers
+            ],
+            'statuses': [
+                {'value': value, 'label': label}
+                for value, label in LoanApplication.Status.choices
+            ],
+            'date_field': 'submitted',
+            'pdf_max_rows': bulk_export.PDF_MAX_ROWS,
+        })
+
+
+class LoanApplicationsExportView(APIView):
+    """
+    GET /api/v1/exports/loan-applications/excel/
+    GET /api/v1/exports/loan-applications/csv/
+    GET /api/v1/exports/loan-applications/pdf/
+
+    Download every loan application matching the filters (see
+    LoanApplicationsExportSummaryView), one row per application. Admins may
+    export all employers or one; HR managers only their own employer.
+
+    The file contains personal and financial data: responses are not cached,
+    nothing from the rows is logged, and each export is audit-logged with the
+    filters, format and row count under an export reference that is also
+    printed in the Excel and PDF files.
+    """
+
+    permission_classes = [IsAuthenticated, IsHROrAdmin]
+    export_format = None  # set per route: 'excel', 'csv' or 'pdf'
+
+    CONTENT_TYPES = {
+        'excel': ('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'xlsx'),
+        'csv': ('text/csv; charset=utf-8', 'csv'),
+        'pdf': ('application/pdf', 'pdf'),
+    }
+
+    def get(self, request):
+        filters = bulk_export.parse_export_filters(request)
+        ctx = bulk_export.new_export_context(filters, request.user)
+        count = ctx.summary['count']
+
+        if self.export_format == 'pdf' and count > bulk_export.PDF_MAX_ROWS:
+            raise ValidationError({'format': [
+                f'{count:,} applications is too many for a PDF (the limit is '
+                f'{bulk_export.PDF_MAX_ROWS:,}). Narrow the filters or download '
+                f'Excel or CSV instead.'
+            ]})
+
+        content_type, extension = self.CONTENT_TYPES[self.export_format]
+        filename = bulk_export.export_filename(filters, extension)
+
+        AuditLog.log(
+            action=f'Loan applications exported ({self.export_format}): {count} application(s)',
+            actor=request.user,
+            target_type='LoanApplicationExport',
+            target_id=ctx.export_id,
+            metadata={
+                'format': self.export_format,
+                'filters': filters.as_metadata(),
+                'row_count': count,
+            },
+            ip_address=get_client_ip(request),
+        )
+        logger.info(
+            'Loan applications export %s by user %s: format=%s rows=%s',
+            ctx.export_id, request.user.id, self.export_format, count,
+        )
+
+        rows = bulk_export.iter_rows(filters)
+        if self.export_format == 'csv':
+            response = StreamingHttpResponse(bulk_export.iter_csv(rows), content_type=content_type)
+        elif self.export_format == 'excel':
+            response = HttpResponse(bulk_export.render_xlsx(rows, ctx), content_type=content_type)
+        else:
+            response = HttpResponse(bulk_export.render_pdf(rows, ctx), content_type=content_type)
+
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        response['Cache-Control'] = 'no-store'
+        response['X-Content-Type-Options'] = 'nosniff'
         return response

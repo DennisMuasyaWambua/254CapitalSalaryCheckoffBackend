@@ -228,6 +228,8 @@ CORS_ALLOWED_ORIGINS = env.list(
     default=['http://localhost:3000', 'http://127.0.0.1:3000','https://254-capital.com', 'https://254-capital.vercel.app', 'https://254capital-production-c360.up.railway.app']
 )
 CORS_ALLOW_CREDENTIALS = True
+# Lets the frontend read the server's filename for file downloads (exports).
+CORS_EXPOSE_HEADERS = ['Content-Disposition']
 CORS_ALLOW_HEADERS = [
     'accept',
     'accept-encoding',
