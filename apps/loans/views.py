@@ -213,9 +213,12 @@ class LoanApplicationListCreateView(APIView):
                 doc_serializer.is_valid(raise_exception=True)
                 doc_serializer.save()
 
-        # Trigger notification to HR (async)
-        from apps.notifications.tasks import notify_hr_new_application
+        # Notify the employer's HR and the 254 Capital application inbox (async)
+        from apps.notifications.tasks import (
+            notify_admins_new_application, notify_hr_new_application,
+        )
         notify_hr_new_application.delay(str(loan.id))
+        notify_admins_new_application.delay(str(loan.id))
 
         # Log action
         AuditLog.log(

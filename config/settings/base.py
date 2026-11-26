@@ -390,6 +390,13 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default='noreply@254capital.com')
 ADMIN_NOTIFICATION_EMAILS = env.list(
     'ADMIN_NOTIFICATION_EMAILS', default=['info@254-capital.com']
 )
+# 254 Capital inbox(es) that receive a "New Loan Application" alert each time
+# an employee applies. checkoff@ is also the address every system email is
+# sent from, so without this alert its inbox only ever got bounces and HR
+# replies, never the applications themselves. Comma-separated in env.
+APPLICATION_ALERT_EMAILS = env.list(
+    'APPLICATION_ALERT_EMAILS', default=['checkoff@254-capital.com']
+)
 
 # Security Settings (will be overridden in production)
 SECURE_BROWSER_XSS_FILTER = True

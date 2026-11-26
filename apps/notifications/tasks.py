@@ -48,6 +48,19 @@ def _hr_recipients_for_employer(employer):
     return recipients
 
 
+def _configured_inboxes(addresses):
+    """
+    Clean a list of inbox addresses from settings: strip blanks and drop
+    case-insensitive duplicates, keeping the configured order.
+    """
+    inboxes = []
+    for address in addresses or []:
+        address = (address or '').strip()
+        if address and address.lower() not in {i.lower() for i in inboxes}:
+            inboxes.append(address)
+    return inboxes
+
+
 def _hr_email_html(header_color, title, greeting_name, intro_html, detail_rows, footer_html=''):
     """
     Build an HR notification email using the same layout/styling as the rest of
@@ -537,11 +550,7 @@ def notify_admins_hr_approved(application_id: str, hr_name: str = '', comment: s
         # Email the 254 Capital admin inbox(es) from settings only. Admin
         # login accounts are deliberately not emailed: their addresses are
         # personal/login addresses, not the inbox the admin team reads.
-        recipients = []
-        for email in settings.ADMIN_NOTIFICATION_EMAILS:
-            email = (email or '').strip()
-            if email and email.lower() not in {r.lower() for r in recipients}:
-                recipients.append(email)
+        recipients = _configured_inboxes(settings.ADMIN_NOTIFICATION_EMAILS)
         if not recipients:
             logger.warning(
                 f'ADMIN_NOTIFICATION_EMAILS is empty; skipping HR-approval '
@@ -595,6 +604,76 @@ def notify_admins_hr_approved(application_id: str, hr_name: str = '', comment: s
 
     except Exception as e:
         logger.error(f'Failed to send admin HR-approval notifications: {str(e)}')
+
+
+@shared_task
+def notify_admins_new_application(application_id: str):
+    """
+    Email the 254 Capital application inbox(es) (APPLICATION_ALERT_EMAILS,
+    checkoff@ by default) that an employee has just applied.
+
+    The HR email for a new application goes to the employer's HR, so this is
+    what tells 254 Capital itself that an application has come in.
+
+    Args:
+        application_id: UUID of loan application
+    """
+    try:
+        from apps.loans.models import LoanApplication
+
+        app = LoanApplication.objects.select_related('employee', 'employer').get(id=application_id)
+
+        recipients = _configured_inboxes(settings.APPLICATION_ALERT_EMAILS)
+        if not recipients:
+            logger.warning(
+                f'APPLICATION_ALERT_EMAILS is empty; skipping new-application '
+                f'admin email for {app.application_number}.'
+            )
+            return
+
+        employee_name = app.employee.get_full_name()
+        employer_name = app.employer.name if app.employer else 'N/A'
+        application_date = app.created_at.strftime('%d %B %Y') if app.created_at else 'N/A'
+        subject = f'New Loan Application - {employee_name} ({app.application_number})'
+
+        body_html = _hr_email_html(
+            header_color='#2c3e50',
+            title='New Loan Application',
+            greeting_name='Admin',
+            intro_html=(
+                f'<p>An employee of <strong>{employer_name}</strong> has submitted '
+                f'a new loan application.</p>'
+            ),
+            detail_rows=[
+                ('Employee', employee_name),
+                ('Phone', app.employee.phone_number or 'N/A'),
+                ('Employer', employer_name),
+                ('Loan Amount Requested', f'KES {app.principal_amount:,.2f}'),
+                ('Repayment Period', f'{app.repayment_months} months'),
+                ('Monthly Deduction', f'KES {app.monthly_deduction:,.2f}'),
+                ('Application Number', app.application_number),
+                ('Application Date', application_date),
+            ],
+            footer_html=(
+                '<p>It is now awaiting HR approval at the employer. You can follow it '
+                'in the Loan Application Queue on the admin portal.</p>'
+            ),
+        )
+
+        for email in recipients:
+            result = send_email(email, subject, body_html)
+            if result.get('success'):
+                logger.info(
+                    f'New-application admin email sent to {email} for {app.application_number}'
+                )
+            else:
+                logger.error(
+                    f'Failed to send new-application admin email to {email} '
+                    f'for {app.application_number}: {result.get("error")}'
+                )
+
+    except Exception as e:
+        logger.error(f'Failed to send admin new-application notification: {str(e)}')
 
 
 @shared_task

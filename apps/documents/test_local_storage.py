@@ -23,6 +23,7 @@ MEDIA_ROOT = tempfile.mkdtemp()
 @mock.patch('apps.loans.views.send_internal_alert')
 @mock.patch('apps.loans.views.send_email')
 @mock.patch('apps.notifications.tasks.notify_hr_new_application.delay')
+@mock.patch('apps.notifications.tasks.notify_admins_new_application.delay')
 class LocalDocumentStorageTests(TestCase):
 
     @classmethod

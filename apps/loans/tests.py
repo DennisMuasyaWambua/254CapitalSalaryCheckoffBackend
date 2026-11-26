@@ -56,6 +56,7 @@ def make_employer():
 @mock.patch('apps.loans.views.send_internal_alert')
 @mock.patch('apps.loans.views.send_email')
 @mock.patch('apps.notifications.tasks.notify_hr_new_application.delay')
+@mock.patch('apps.notifications.tasks.notify_admins_new_application.delay')
 class LoanApplicationSubmissionTests(TestCase):
 
     @classmethod
@@ -99,6 +100,21 @@ class LoanApplicationSubmissionTests(TestCase):
         self.assertEqual(loan.documents.count(), 3)
         self.assertEqual(loan.terms_version, CURRENT_TERMS_VERSION)
         self.assertIsNotNone(loan.terms_accepted_at)
+
+    def test_submission_alerts_hr_and_the_application_inbox(self, admin_alert, hr_alert, *_):
+        response = self.submit()
+
+        self.assertEqual(response.status_code, 201, response.content)
+        loan_id = response.json()['id']
+        hr_alert.assert_called_once_with(loan_id)
+        admin_alert.assert_called_once_with(loan_id)
+
+    def test_rejected_submission_sends_no_alerts(self, admin_alert, hr_alert, *_):
+        response = self.submit(fields={'principal_amount': '3000'})
+
+        self.assertEqual(response.status_code, 400)
+        hr_alert.assert_not_called()
+        admin_alert.assert_not_called()
 
     def test_bank_account_number_alias_is_accepted(self, *_):
         response = self.submit(fields={
